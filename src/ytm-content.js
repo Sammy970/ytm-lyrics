@@ -46,6 +46,7 @@
   let pipParsedLRC = null;
   let pipEnabled = false;
   let pipLastState = null;
+  let pipSongStartTime = 0;
 
   function renderPiP(state) {
     if (!pipWindow || pipWindow.closed) return;
@@ -87,7 +88,7 @@
           p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:#555;cursor:pointer;transition:color 0.2s,background 0.2s;";
           p.textContent = line.text || "♪";
           p.addEventListener("click", () => {
-            chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time });
+            chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time + pipSongStartTime });
           });
           body.appendChild(p);
         });
@@ -102,7 +103,7 @@
     if (!pipWindow || pipWindow.closed || !pipParsedLRC) return;
     const body = pipWindow.document.getElementById("pip-body");
     if (!body) return;
-    const activeIdx = getActiveLine(pipParsedLRC, currentTime);
+    const activeIdx = getActiveLine(pipParsedLRC, currentTime - pipSongStartTime);
     body.querySelectorAll("[data-line-index]").forEach((el, i) => {
       if (i === activeIdx) {
         Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: "rgba(160,196,255,0.12)" });
@@ -238,7 +239,9 @@
     if (!tracksEqual(track, lastTrack)) {
       lastTrack = track;
       console.log("[ytm-content] Track changed:", track);
-      chrome.runtime.sendMessage({ type: 'NOW_PLAYING', track });
+      const video = document.querySelector('video');
+      const songStartTime = video ? video.currentTime : 0;
+      chrome.runtime.sendMessage({ type: 'NOW_PLAYING', track, songStartTime });
     }
   }
 
@@ -271,6 +274,7 @@
       }
     } else if (message.type === "LYRICS_UPDATE") {
       pipLastState = message.state;
+      pipSongStartTime = (message.state && message.state.songStartTime) || 0;
       if (pipWindow && !pipWindow.closed) renderPiP(message.state);
     } else if (message.type === "SYNC_UPDATE") {
       syncPiP(message.currentTime);

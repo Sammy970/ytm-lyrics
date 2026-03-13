@@ -8,6 +8,7 @@ let appState = {
   nowPlaying: null,      // Track | null
   lyrics: null,          // string | null
   lyricsStatus: "idle",  // "idle" | "loading" | "found" | "not_found" | "error"
+  songStartTime: 0,      // video.currentTime when the current track started
 };
 
 // ---------------------------------------------------------------------------
@@ -229,14 +230,16 @@ function broadcastState() {
 /**
  * Update appState and kick off a lyrics fetch for the given track.
  * @param {Track|null} track
+ * @param {number} songStartTime - video.currentTime when this track started
  */
-async function handleNowPlaying(track) {
+async function handleNowPlaying(track, songStartTime) {
   appState.nowPlaying = track;
 
   if (!track) {
     console.log("[background] Track cleared, resetting state");
     appState.lyrics = null;
     appState.lyricsStatus = "idle";
+    appState.songStartTime = 0;
     broadcastState();
     return;
   }
@@ -252,7 +255,8 @@ async function handleNowPlaying(track) {
   }
 
   appState.nowPlaying = cleanTrack;
-  console.log(`[background] Now playing: "${cleanTrack.title}" by "${cleanTrack.artist}"`);
+  appState.songStartTime = songStartTime || 0;
+  console.log(`[background] Now playing: "${cleanTrack.title}" by "${cleanTrack.artist}" (songStartTime: ${appState.songStartTime})`);
   appState.lyricsStatus = "loading";
   appState.lyrics = null;
   broadcastState();
@@ -304,7 +308,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "NOW_PLAYING") {
     // Fire-and-forget; sendResponse not needed for this message type
-    handleNowPlaying(message.track);
+    handleNowPlaying(message.track, message.songStartTime);
     return false;
   }
 

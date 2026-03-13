@@ -247,6 +247,9 @@ function getActiveLine(lines, currentTime) {
 
 // Parsed LRC lines for the current track (null = plain lyrics, no sync)
 let parsedLRC = null;
+// video.currentTime at the moment the current song's lyrics were loaded.
+// All incoming currentTime values are offset by this to get song-relative time.
+let parsedLRCSongStartTime = 0;
 
 let currentMode = "expanded";
 
@@ -381,7 +384,7 @@ function renderOverlay(state) {
           lineHeight: "1.5",
         });
         p.addEventListener("click", () => {
-          chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time });
+          chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time + parsedLRCSongStartTime });
         });
         body.appendChild(p);
       });
@@ -434,13 +437,20 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
       lastKnownState = message.state;
       if (!message.state || message.state.lyricsStatus !== "found") {
         parsedLRC = null;
+        parsedLRCSongStartTime = 0;
       }
       renderOverlay(message.state);
+      // When new lyrics load, record the video time offset from the state
+      // so SYNC_UPDATE currentTime can be made song-relative.
+      if (message.state && message.state.lyricsStatus === "found" && parsedLRC) {
+        parsedLRCSongStartTime = message.state.songStartTime || 0;
+      }
     } else if (message.type === "SYNC_UPDATE") {
       if (parsedLRC) {
         const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
         if (body) {
-          const activeIdx = getActiveLine(parsedLRC, message.currentTime);
+          const songTime = message.currentTime - parsedLRCSongStartTime;
+          const activeIdx = getActiveLine(parsedLRC, songTime);
           const lines = body.querySelectorAll("[data-line-index]");
           lines.forEach((el, i) => {
             if (i === activeIdx) {
