@@ -17,6 +17,28 @@ let appState = {
 const activeOverlayTabs = new Set();
 
 // ---------------------------------------------------------------------------
+// Lyrics window tracking — reuse existing window instead of opening duplicates
+// ---------------------------------------------------------------------------
+let lyricsWindowId = null;
+
+function createLyricsWindow() {
+  chrome.windows.create({
+    url: chrome.runtime.getURL("src/lyrics-window.html"),
+    type: "popup",
+    width: 380,
+    height: 600,
+    focused: true,
+  }, (win) => {
+    if (win) lyricsWindowId = win.id;
+  });
+}
+
+// Clear the tracked ID when the window is closed
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === lyricsWindowId) lyricsWindowId = null;
+});
+
+// ---------------------------------------------------------------------------
 // Lyrics fetcher — inlined from src/lyrics-fetcher.js (service workers can't use require)
 // ---------------------------------------------------------------------------
 function sleep(ms) {
@@ -264,6 +286,22 @@ async function handleNowPlaying(track) {
 // Message listener (Requirements 1.3, 5.3)
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "OPEN_LYRICS_WINDOW") {
+    // If a lyrics window is already open, focus it instead of opening a new one
+    if (lyricsWindowId != null) {
+      chrome.windows.update(lyricsWindowId, { focused: true }, (win) => {
+        if (chrome.runtime.lastError || !win) {
+          // Window no longer exists, open a fresh one
+          lyricsWindowId = null;
+          createLyricsWindow();
+        }
+      });
+    } else {
+      createLyricsWindow();
+    }
+    return false;
+  }
+
   if (message.type === "NOW_PLAYING") {
     // Fire-and-forget; sendResponse not needed for this message type
     handleNowPlaying(message.track);

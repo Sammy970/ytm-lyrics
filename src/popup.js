@@ -46,11 +46,22 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
     });
 
     document.getElementById("window-btn").addEventListener("click", () => {
-      chrome.windows.create({
-        url: chrome.runtime.getURL("src/lyrics-window.html"),
-        type: "popup",
-        width: 380,
-        height: 600,
+      // PiP must open in the YTM tab (video + mediaSession live there).
+      // chrome.scripting.executeScript carries the popup's user-gesture into the
+      // tab's context, which satisfies requestWindow()'s activation requirement.
+      chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+        if (!tabs || !tabs[0]) return;
+        const ytmTabId = tabs[0].id;
+        chrome.scripting.executeScript({
+          target: { tabId: ytmTabId },
+          world: "ISOLATED",
+          func: () => {
+            // Runs in the content script's isolated world, carrying the popup's user gesture.
+            // The ytm-content.js listener picks this up and calls requestWindow().
+            window.dispatchEvent(new CustomEvent("ytm-lyrics-open-pip"));
+          },
+        });
+        window.close();
       });
     });
   });

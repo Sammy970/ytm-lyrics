@@ -432,33 +432,33 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "LYRICS_UPDATE") {
       lastKnownState = message.state;
-      // Reset parsed LRC when track changes
       if (!message.state || message.state.lyricsStatus !== "found") {
         parsedLRC = null;
       }
       renderOverlay(message.state);
-    } else if (message.type === "SYNC_UPDATE" && parsedLRC) {
-      // Highlight the active lyric line
-      const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
-      if (!body) return;
-      const activeIdx = getActiveLine(parsedLRC, message.currentTime);
-      const lines = body.querySelectorAll("[data-line-index]");
-      lines.forEach((el, i) => {
-        if (i === activeIdx) {
-          Object.assign(el.style, {
-            color: "#ffffff",
-            fontWeight: "bold",
-            fontSize: "15px",
-            background: "rgba(160,196,255,0.12)",
+    } else if (message.type === "SYNC_UPDATE") {
+      if (parsedLRC) {
+        const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
+        if (body) {
+          const activeIdx = getActiveLine(parsedLRC, message.currentTime);
+          const lines = body.querySelectorAll("[data-line-index]");
+          lines.forEach((el, i) => {
+            if (i === activeIdx) {
+              Object.assign(el.style, {
+                color: "#ffffff",
+                fontWeight: "bold",
+                fontSize: "15px",
+                background: "rgba(160,196,255,0.12)",
+              });
+              el.scrollIntoView({ block: "center", behavior: "smooth" });
+            } else if (i < activeIdx) {
+              Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
+            } else {
+              Object.assign(el.style, { color: "#888", fontWeight: "normal", fontSize: "14px", background: "" });
+            }
           });
-          // Auto-scroll active line into view (smooth, centered)
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        } else if (i < activeIdx) {
-          Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
-        } else {
-          Object.assign(el.style, { color: "#888", fontWeight: "normal", fontSize: "14px", background: "" });
         }
-      });
+      }
     } else if (message.type === "TOGGLE_OVERLAY") {
       const existing = document.getElementById(OVERLAY_ID);
       if (existing) {
@@ -482,7 +482,7 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
     chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
       if (response && response.state) {
         lastKnownState = response.state;
-        const overlay = renderOverlay(response.state);
+        renderOverlay(response.state);
 
         // Apply saved position if available
         if (prefs && prefs.position) {
