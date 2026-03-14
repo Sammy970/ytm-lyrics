@@ -49,22 +49,118 @@
   let pipSongStartTime = 0;
   let pipLastActiveIdx = -1;
   let pipUserScrolledAt = 0;
+  let pipRenderGeneration = 0; // incremented on each renderPiP call to cancel stale renders
 
-  function renderPiP(state) {
+  // ---------------------------------------------------------------------------
+  // Album art color extraction
+  // ---------------------------------------------------------------------------
+
+  function getThumbnailUrl() {
+    const img = document.querySelector("ytmusic-player-bar img#thumbnail") ||
+                document.querySelector("ytmusic-player-bar .thumbnail img") ||
+                document.querySelector("ytmusic-player-bar img");
+    return img ? img.src : null;
+  }
+
+  // Extracts dominant vivid color from raw pixel data (Uint8ClampedArray).
+  function extractDominantColor(data) {
+    const FALLBACK = { r: 22, g: 33, b: 62 };
+    let bestR = 0, bestG = 0, bestB = 0, bestScore = -1;
+    for (let i = 0; i < data.length; i += 16) {
+      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+      if (a < 128) continue;
+      const max = Math.max(r, g, b) / 255;
+      const min = Math.min(r, g, b) / 255;
+      const l = (max + min) / 2;
+      const s = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+      const score = s * (1 - Math.abs(l - 0.45));
+      if (score > bestScore) {
+        bestScore = score;
+        bestR = r; bestG = g; bestB = b;
+      }
+    }
+    return bestScore > 0 ? { r: bestR, g: bestG, b: bestB } : FALLBACK;
+  }
+
+  // Fetches the thumbnail as a blob (bypasses CORS) then draws it onto a canvas
+  // to extract the dominant color. Returns a Promise<{r,g,b}>.
+  async function getDominantColorFromUrl(url) {
+    const FALLBACK = { r: 22, g: 33, b: 62 };
+    if (!url) return FALLBACK;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return FALLBACK;
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      return await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = 24;
+            canvas.height = 24;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, 24, 24);
+            const data = ctx.getImageData(0, 0, 24, 24).data;
+            resolve(extractDominantColor(data));
+          } catch {
+            resolve(FALLBACK);
+          } finally {
+            URL.revokeObjectURL(blobUrl);
+          }
+        };
+        img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(FALLBACK); };
+        img.src = blobUrl;
+      });
+    } catch {
+      return FALLBACK;
+    }
+  }
+
+  // Darkens an { r, g, b } color by a factor (0–1) for use as background
+  function darken({ r, g, b }, factor) {
+    return `rgb(${Math.round(r * factor)},${Math.round(g * factor)},${Math.round(b * factor)})`;
+  }
+
+  async function renderPiP(state) {
     if (!pipWindow || pipWindow.closed) return;
+
+    // Stamp this render; if a newer renderPiP call starts while we await,
+    // the stale one bails out before touching the DOM.
+    const generation = ++pipRenderGeneration;
+
+    // --- Extract album art color via blob fetch (bypasses CORS) ---
+    const thumbUrl = getThumbnailUrl();
+    const color = await getDominantColorFromUrl(thumbUrl);
+
+    // Bail if a newer render started or the window closed during the fetch
+    if (generation !== pipRenderGeneration || !pipWindow || pipWindow.closed) return;
+
     const doc = pipWindow.document;
     doc.body.innerHTML = "";
 
+    const { r, g, b } = color;
+    const colDark   = darken(color, 0.18);  // very dark for body bg top
+    const colMid    = darken(color, 0.13);  // slightly lighter for body bg bottom
+    const colPanel  = darken(color, 0.22);  // header/footer panels
+    const colBorder = `rgba(${r},${g},${b},0.25)`;
+    const colAccent = `rgb(${Math.min(r + 120, 255)},${Math.min(g + 120, 255)},${Math.min(b + 120, 255)})`;
+    const colHighlight = `rgba(${r},${g},${b},0.28)`;
+
+    // Body gradient from dark-color top to near-black bottom
+    pipWindow.document.body.style.background =
+      `linear-gradient(180deg, ${colDark} 0%, rgb(8,8,14) 100%)`;
+
     // --- Header: track info ---
     const header = doc.createElement("div");
-    header.style.cssText = "background:#16213e;padding:8px 12px;flex-shrink:0;border-bottom:1px solid #1e2d50;";
+    header.style.cssText = `background:${colPanel};padding:8px 12px;flex-shrink:0;border-bottom:1px solid ${colBorder};`;
 
     const trackTitle = doc.createElement("div");
-    trackTitle.style.cssText = "font-size:12px;font-weight:bold;color:#a0c4ff;word-break:break-word;";
+    trackTitle.style.cssText = `font-size:12px;font-weight:bold;color:${colAccent};word-break:break-word;`;
     trackTitle.textContent = state && state.nowPlaying ? state.nowPlaying.title : "YT Music Lyrics";
 
     const trackArtist = doc.createElement("div");
-    trackArtist.style.cssText = "font-size:11px;color:#8899aa;margin-top:2px;word-break:break-word;";
+    trackArtist.style.cssText = "font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;word-break:break-word;";
     trackArtist.textContent = state && state.nowPlaying ? state.nowPlaying.artist : "";
 
     header.appendChild(trackTitle);
@@ -73,8 +169,7 @@
 
     const body = doc.createElement("div");
     body.id = "pip-body";
-    body.style.cssText = "flex:1;overflow-y:auto;padding:12px 14px;scroll-behavior:smooth;";
-    // Detect manual scrolls so auto-scroll can pause for 5 seconds
+    body.style.cssText = "flex:1;overflow-y:auto;padding:12px 14px;scroll-behavior:smooth;background:transparent;";
     body.addEventListener("scroll", () => {
       pipUserScrolledAt = Date.now();
     }, { passive: true });
@@ -85,7 +180,7 @@
     pipUserScrolledAt = 0;
 
     const noLyrics = (text) => {
-      body.style.cssText += "display:flex;align-items:center;justify-content:center;color:#666;font-style:italic;font-size:13px;";
+      body.style.cssText += "display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.35);font-style:italic;font-size:13px;";
       body.textContent = text;
     };
 
@@ -100,7 +195,7 @@
         pipParsedLRC.forEach((line, i) => {
           const p = doc.createElement("p");
           p.dataset.lineIndex = String(i);
-          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:#555;cursor:pointer;transition:color 0.2s,background 0.2s;word-break:break-word;white-space:normal;";
+          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s;word-break:break-word;white-space:normal;";
           p.textContent = line.text || "♪";
           p.addEventListener("click", () => {
             chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time + pipSongStartTime });
@@ -108,25 +203,29 @@
           body.appendChild(p);
         });
       } else {
-        body.style.cssText += "white-space:pre-wrap;font-size:13px;color:#ccc;";
+        body.style.cssText += "white-space:pre-wrap;font-size:13px;color:rgba(255,255,255,0.7);";
         body.textContent = state.lyrics;
       }
     }
 
+    // Store accent colors on body so syncPiP can use them
+    body.dataset.colAccent = colAccent;
+    body.dataset.colHighlight = colHighlight;
+
     // --- Controls footer: ⏮  ⏯  ⏭ ---
     const footer = doc.createElement("div");
     footer.id = "pip-controls";
-    footer.style.cssText = "background:#16213e;border-top:1px solid #1e2d50;flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;";
+    footer.style.cssText = `background:${colPanel};border-top:1px solid ${colBorder};flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;`;
 
-    const btnStyle = "background:none;border:none;color:#a0c4ff;font-size:20px;cursor:pointer;padding:4px 10px;border-radius:6px;transition:background 0.15s;line-height:1;";
-    const btnHover = "background:rgba(160,196,255,0.12);";
+    const btnStyle = `background:none;border:none;color:${colAccent};font-size:20px;cursor:pointer;padding:4px 10px;border-radius:6px;transition:background 0.15s;line-height:1;`;
+    const btnHoverBg = `rgba(${r},${g},${b},0.25)`;
 
     function makeCtrlBtn(icon, action, title) {
       const btn = doc.createElement("button");
       btn.textContent = icon;
       btn.title = title;
       btn.style.cssText = btnStyle;
-      btn.addEventListener("mouseover", () => { btn.style.background = "rgba(160,196,255,0.12)"; });
+      btn.addEventListener("mouseover", () => { btn.style.background = btnHoverBg; });
       btn.addEventListener("mouseout",  () => { btn.style.background = "none"; });
       btn.addEventListener("click", () => {
         chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action });
@@ -136,13 +235,12 @@
 
     footer.appendChild(makeCtrlBtn("⏮", "prev", "Previous"));
 
-    // Play/pause button — id so syncPiP can update its icon live
     const playBtn = doc.createElement("button");
     playBtn.id = "pip-play-btn";
     playBtn.title = "Play / Pause";
     playBtn.style.cssText = btnStyle + "font-size:24px;";
     playBtn.textContent = (state && state.isPlaying) ? "⏸" : "▶";
-    playBtn.addEventListener("mouseover", () => { playBtn.style.background = "rgba(160,196,255,0.12)"; });
+    playBtn.addEventListener("mouseover", () => { playBtn.style.background = btnHoverBg; });
     playBtn.addEventListener("mouseout",  () => { playBtn.style.background = "none"; });
     playBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action: "play-pause" });
@@ -168,15 +266,16 @@
     if (!body) return;
     const activeIdx = getActiveLine(pipParsedLRC, currentTime - pipSongStartTime);
     const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
+    const colHighlight = body.dataset.colHighlight || "rgba(160,196,255,0.18)";
     let activeEl = null;
     body.querySelectorAll("[data-line-index]").forEach((el, i) => {
       if (i === activeIdx) {
         activeEl = el;
-        Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: "rgba(160,196,255,0.12)" });
+        Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: colHighlight });
       } else if (i < activeIdx) {
-        Object.assign(el.style, { color: "#444", fontWeight: "normal", fontSize: "14px", background: "" });
+        Object.assign(el.style, { color: "rgba(255,255,255,0.25)", fontWeight: "normal", fontSize: "14px", background: "" });
       } else {
-        Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
+        Object.assign(el.style, { color: "rgba(255,255,255,0.35)", fontWeight: "normal", fontSize: "14px", background: "" });
       }
     });
     // Always keep active line centered in the scroll container
@@ -236,15 +335,15 @@
   //   • The page has a playing <video> with audio  AND
   //   • The user switches to another tab or app
   // This is exactly the same mechanism Google Meet uses to stay on top.
+  // "enterpictureinpicture" is only supported in Chrome 116+ with the
+  // Document PiP origin trial flag. Silently skip if unavailable.
   try {
     navigator.mediaSession.setActionHandler("enterpictureinpicture", () => {
       if (!pipEnabled) return;
-      console.log("[pip] mediaSession auto-PiP triggered");
       openPiPWindow(pipLastState);
     });
-    console.log("[pip] mediaSession enterpictureinpicture handler registered");
-  } catch (e) {
-    console.warn("[pip] enterpictureinpicture mediaSession action not supported:", e.message);
+  } catch {
+    // Not supported in this Chrome version — manual open via popup still works.
   }
 
   // Fetch initial state on load so pipLastState is populated
@@ -316,7 +415,7 @@
       console.log("[ytm-content] Track changed:", track);
       const video = document.querySelector('video');
       const songStartTime = video ? video.currentTime : 0;
-      chrome.runtime.sendMessage({ type: 'NOW_PLAYING', track, songStartTime });
+      safeSend({ type: 'NOW_PLAYING', track, songStartTime });
     }
   }
 
@@ -377,9 +476,7 @@
   function broadcastPlayState() {
     const video = document.querySelector('video');
     if (!video) return;
-    chrome.runtime.sendMessage({ type: 'PLAY_STATE', isPlaying: !video.paused }, () => {
-      void chrome.runtime.lastError;
-    });
+    safeSend({ type: 'PLAY_STATE', isPlaying: !video.paused });
   }
 
   // Attach play/pause listeners once the video element is ready
@@ -391,17 +488,28 @@
     video.addEventListener("pause", broadcastPlayState);
   }
 
+  // Safely send a chrome runtime message — returns false if context is gone.
+  function safeSend(msg) {
+    try {
+      chrome.runtime.sendMessage(msg, () => { void chrome.runtime.lastError; });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // --- Playback time sync ---
   // Send current video time every 500ms so the overlay can highlight the active lyric line.
-  setInterval(() => {
+  const timeInterval = setInterval(() => {
     attachVideoListeners();
     const video = document.querySelector('video');
     if (!video) return;
-    chrome.runtime.sendMessage({
+    const ok = safeSend({
       type: 'TIME_UPDATE',
       currentTime: video.currentTime,
       isPlaying: !video.paused,
     });
+    if (!ok) clearInterval(timeInterval);
   }, 500);
 
   // --- Polling fallback ---
@@ -409,7 +517,10 @@
   // Poll every 2 seconds. If the observer is already covering changes this
   // is a no-op (tracksEqual guard prevents duplicate messages).
   const POLL_INTERVAL_MS = 2000;
-  setInterval(checkAndNotify, POLL_INTERVAL_MS);
+  const pollInterval = setInterval(() => {
+    if (!safeSend({ type: '_ping' })) { clearInterval(pollInterval); return; }
+    checkAndNotify();
+  }, POLL_INTERVAL_MS);
 
   // --- Initialise ---
 
