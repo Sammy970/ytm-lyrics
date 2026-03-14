@@ -151,9 +151,21 @@
     pipWindow.document.body.style.background =
       `linear-gradient(180deg, ${colDark} 0%, rgb(8,8,14) 100%)`;
 
-    // --- Header: track info ---
+    // --- Header: album art + track info ---
     const header = doc.createElement("div");
-    header.style.cssText = `background:${colPanel};padding:8px 12px;flex-shrink:0;border-bottom:1px solid ${colBorder};`;
+    header.style.cssText = `background:${colPanel};padding:8px 12px;flex-shrink:0;border-bottom:1px solid ${colBorder};display:flex;align-items:center;gap:10px;`;
+
+    // Album art thumbnail
+    if (thumbUrl) {
+      const thumb = doc.createElement("img");
+      thumb.src = thumbUrl;
+      thumb.style.cssText = "width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,0.5);";
+      header.appendChild(thumb);
+    }
+
+    // Track title + artist stacked
+    const trackInfo = doc.createElement("div");
+    trackInfo.style.cssText = "flex:1;min-width:0;";
 
     const trackTitle = doc.createElement("div");
     trackTitle.style.cssText = `font-size:12px;font-weight:bold;color:${colAccent};word-break:break-word;`;
@@ -163,8 +175,9 @@
     trackArtist.style.cssText = "font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;word-break:break-word;";
     trackArtist.textContent = state && state.nowPlaying ? state.nowPlaying.artist : "";
 
-    header.appendChild(trackTitle);
-    if (state && state.nowPlaying) header.appendChild(trackArtist);
+    trackInfo.appendChild(trackTitle);
+    if (state && state.nowPlaying) trackInfo.appendChild(trackArtist);
+    header.appendChild(trackInfo);
     doc.body.appendChild(header);
 
     const body = doc.createElement("div");
@@ -415,7 +428,8 @@
       console.log("[ytm-content] Track changed:", track);
       const video = document.querySelector('video');
       const songStartTime = video ? video.currentTime : 0;
-      safeSend({ type: 'NOW_PLAYING', track, songStartTime });
+      const thumbnailUrl = getThumbnailUrl();
+      safeSend({ type: 'NOW_PLAYING', track, songStartTime, thumbnailUrl });
     }
   }
 

@@ -115,6 +115,57 @@ const STATUS_STYLES = {
   textAlign: "center",
 };
 
+// ---------------------------------------------------------------------------
+// Album art color extraction (same approach as ytm-content.js — blob fetch
+// bypasses CORS so getImageData works on cross-origin thumbnail URLs)
+// ---------------------------------------------------------------------------
+
+function overlayExtractDominantColor(data) {
+  const FALLBACK = { r: 22, g: 33, b: 62 };
+  let bestR = 0, bestG = 0, bestB = 0, bestScore = -1;
+  for (let i = 0; i < data.length; i += 16) {
+    const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+    if (a < 128) continue;
+    const max = Math.max(r, g, b) / 255;
+    const min = Math.min(r, g, b) / 255;
+    const l = (max + min) / 2;
+    const s = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+    const score = s * (1 - Math.abs(l - 0.45));
+    if (score > bestScore) { bestScore = score; bestR = r; bestG = g; bestB = b; }
+  }
+  return bestScore > 0 ? { r: bestR, g: bestG, b: bestB } : FALLBACK;
+}
+
+async function overlayGetDominantColor(url) {
+  const FALLBACK = { r: 22, g: 33, b: 62 };
+  if (!url) return FALLBACK;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return FALLBACK;
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    return await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = 24; canvas.height = 24;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, 24, 24);
+          resolve(overlayExtractDominantColor(ctx.getImageData(0, 0, 24, 24).data));
+        } catch { resolve(FALLBACK); }
+        finally { URL.revokeObjectURL(blobUrl); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(FALLBACK); };
+      img.src = blobUrl;
+    });
+  } catch { return FALLBACK; }
+}
+
+function overlayDarken({ r, g, b }, factor) {
+  return `rgb(${Math.round(r * factor)},${Math.round(g * factor)},${Math.round(b * factor)})`;
+}
+
 /** Apply a plain object of style key/values to an element. */
 function applyStyles(el, styles) {
   Object.assign(el.style, styles);
@@ -277,6 +328,10 @@ let parsedLRCSongStartTime = 0;
 let overlayLastActiveIdx = -1;
 // Timestamp of the last user scroll in the overlay — auto-scroll pauses for 5s after
 let overlayUserScrolledAt = 0;
+// Incremented on each renderOverlay call to cancel stale async renders
+let overlayRenderGeneration = 0;
+// Cached accent colors from last color extraction, used by SYNC_UPDATE
+let overlayColHighlight = "rgba(160,196,255,0.18)";
 
 let currentMode = "expanded";
 
@@ -336,9 +391,25 @@ function closeOverlay() {
  * @param {string|null} state.lyrics
  * @param {string} state.lyricsStatus
  */
-function renderOverlay(state) {
+async function renderOverlay(state) {
   const { nowPlaying, lyrics, lyricsStatus } = state;
+
+  // Stamp generation — bail if a newer render starts while we await color
+  const generation = ++overlayRenderGeneration;
+  const color = await overlayGetDominantColor(state.thumbnailUrl || null);
+  if (generation !== overlayRenderGeneration) return;
+
+  const { r, g, b } = color;
+  const colPanel     = overlayDarken(color, 0.20);
+  const colBorder    = `rgba(${r},${g},${b},0.3)`;
+  const colAccent    = `rgb(${Math.min(r+120,255)},${Math.min(g+120,255)},${Math.min(b+120,255)})`;
+  overlayColHighlight = `rgba(${r},${g},${b},0.28)`;
+
   const overlay = getOrCreateOverlay();
+
+  // Apply gradient background to the overlay container
+  overlay.style.background = `linear-gradient(180deg, ${overlayDarken(color, 0.22)} 0%, ${overlayDarken(color, 0.12)} 100%)`;
+  overlay.style.backgroundColor = "";
 
   // Clear previous content
   overlay.innerHTML = "";
@@ -346,16 +417,47 @@ function renderOverlay(state) {
   // --- Header ---
   const header = document.createElement("div");
   applyStyles(header, HEADER_STYLES);
+  header.style.backgroundColor = colPanel;
+  header.style.borderBottom = `1px solid ${colBorder}`;
   header.dataset.dragHandle = "true";
+
+  // Album art thumbnail
+  if (state.thumbnailUrl) {
+    const thumb = document.createElement("img");
+    thumb.src = state.thumbnailUrl;
+    thumb.style.cssText = "width:36px;height:36px;border-radius:5px;object-fit:cover;flex-shrink:0;box-shadow:0 2px 6px rgba(0,0,0,0.5);margin-right:8px;";
+    header.appendChild(thumb);
+  }
+
+  // Title + artist stacked, fills remaining space
+  const trackInfo = document.createElement("div");
+  trackInfo.style.cssText = "flex:1;min-width:0;overflow:hidden;";
 
   const titleEl = document.createElement("p");
   applyStyles(titleEl, TITLE_STYLES);
+  titleEl.style.color = colAccent;
+  titleEl.style.margin = "0";
   if (nowPlaying) {
-    titleEl.textContent = `${nowPlaying.title} — ${nowPlaying.artist}`;
-    titleEl.title = titleEl.textContent;
+    titleEl.textContent = nowPlaying.title;
+    titleEl.title = `${nowPlaying.title} — ${nowPlaying.artist}`;
   } else {
     titleEl.textContent = "YT Music Lyrics";
   }
+
+  const artistEl = document.createElement("p");
+  Object.assign(artistEl.style, {
+    margin: "0",
+    fontSize: "11px",
+    color: "rgba(255,255,255,0.5)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+  artistEl.textContent = nowPlaying ? nowPlaying.artist : "";
+
+  trackInfo.appendChild(titleEl);
+  if (nowPlaying) trackInfo.appendChild(artistEl);
+  header.appendChild(trackInfo);
 
   const closeBtn = document.createElement("button");
   applyStyles(closeBtn, CLOSE_BTN_STYLES);
@@ -375,7 +477,6 @@ function renderOverlay(state) {
     toggleBtn.setAttribute("aria-label", currentMode === "compact" ? "Expand overlay" : "Compact overlay");
   });
 
-  header.appendChild(titleEl);
   header.appendChild(toggleBtn);
   header.appendChild(closeBtn);
   overlay.appendChild(header);
@@ -461,14 +562,19 @@ function renderOverlay(state) {
   // --- Controls footer (shown whenever a song is playing) ---
   const controls = document.createElement("div");
   applyStyles(controls, CONTROLS_STYLES);
+  controls.style.backgroundColor = colPanel;
+  controls.style.borderTop = `1px solid ${colBorder}`;
+
+  const btnHoverBg = `rgba(${r},${g},${b},0.25)`;
 
   function makeOverlayCtrlBtn(icon, action, label, extraStyles) {
     const btn = document.createElement("button");
     applyStyles(btn, CTRL_BTN_STYLES);
+    btn.style.color = colAccent;
     if (extraStyles) applyStyles(btn, extraStyles);
     btn.textContent = icon;
     btn.setAttribute("aria-label", label);
-    btn.addEventListener("mouseover", () => { btn.style.background = "rgba(160,196,255,0.15)"; });
+    btn.addEventListener("mouseover", () => { btn.style.background = btnHoverBg; });
     btn.addEventListener("mouseout",  () => { btn.style.background = "none"; });
     btn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action });
@@ -481,10 +587,11 @@ function renderOverlay(state) {
   const playPauseBtn = document.createElement("button");
   applyStyles(playPauseBtn, CTRL_BTN_STYLES);
   applyStyles(playPauseBtn, { fontSize: "18px", padding: "3px 12px" });
+  playPauseBtn.style.color = colAccent;
   playPauseBtn.id = "overlay-play-btn";
   playPauseBtn.setAttribute("aria-label", "Play / Pause");
   playPauseBtn.textContent = (state && state.isPlaying) ? "⏸" : "▶";
-  playPauseBtn.addEventListener("mouseover", () => { playPauseBtn.style.background = "rgba(160,196,255,0.15)"; });
+  playPauseBtn.addEventListener("mouseover", () => { playPauseBtn.style.background = btnHoverBg; });
   playPauseBtn.addEventListener("mouseout",  () => { playPauseBtn.style.background = "none"; });
   playPauseBtn.addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action: "play-pause" });
@@ -542,7 +649,7 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
                 color: "#ffffff",
                 fontWeight: "bold",
                 fontSize: "15px",
-                background: isCompact ? "" : "rgba(160,196,255,0.12)",
+                background: isCompact ? "" : overlayColHighlight,
                 display: "",
               });
             } else {
@@ -551,7 +658,7 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
               } else {
                 Object.assign(el.style, {
                   display: "",
-                  color: i < activeIdx ? "#555" : "#888",
+                  color: i < activeIdx ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.5)",
                   fontWeight: "normal",
                   fontSize: "14px",
                   background: "",
