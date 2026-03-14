@@ -250,6 +250,10 @@ let parsedLRC = null;
 // video.currentTime at the moment the current song's lyrics were loaded.
 // All incoming currentTime values are offset by this to get song-relative time.
 let parsedLRCSongStartTime = 0;
+// Last highlighted line index — used to skip scrollIntoView when line hasn't changed
+let overlayLastActiveIdx = -1;
+// Timestamp of the last user scroll in the overlay — auto-scroll pauses for 5s after
+let overlayUserScrolledAt = 0;
 
 let currentMode = "expanded";
 
@@ -393,8 +397,16 @@ function renderOverlay(state) {
       body.textContent = lyrics;
     }
 
+    // Detect manual scrolls so auto-scroll can pause for 5 seconds
+    body.addEventListener("scroll", () => {
+      overlayUserScrolledAt = Date.now();
+    }, { passive: true });
+
     overlay.appendChild(body);
     applyMode(overlay);
+    // Reset tracking state whenever lyrics are freshly rendered
+    overlayLastActiveIdx = -1;
+    overlayUserScrolledAt = 0;
     return;
   }
 
@@ -452,6 +464,7 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
           const songTime = message.currentTime - parsedLRCSongStartTime;
           const activeIdx = getActiveLine(parsedLRC, songTime);
           const lines = body.querySelectorAll("[data-line-index]");
+          const userJustScrolled = (Date.now() - overlayUserScrolledAt) < 5000;
           lines.forEach((el, i) => {
             if (i === activeIdx) {
               Object.assign(el.style, {
@@ -460,13 +473,17 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
                 fontSize: "15px",
                 background: "rgba(160,196,255,0.12)",
               });
-              el.scrollIntoView({ block: "center", behavior: "smooth" });
+              // Only auto-scroll when the active line changes AND user isn't manually browsing
+              if (activeIdx !== overlayLastActiveIdx && !userJustScrolled) {
+                el.scrollIntoView({ block: "center", behavior: "smooth" });
+              }
             } else if (i < activeIdx) {
               Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
             } else {
               Object.assign(el.style, { color: "#888", fontWeight: "normal", fontSize: "14px", background: "" });
             }
           });
+          overlayLastActiveIdx = activeIdx;
         }
       }
     } else if (message.type === "TOGGLE_OVERLAY") {

@@ -47,6 +47,8 @@
   let pipEnabled = false;
   let pipLastState = null;
   let pipSongStartTime = 0;
+  let pipLastActiveIdx = -1;
+  let pipUserScrolledAt = 0;
 
   function renderPiP(state) {
     if (!pipWindow || pipWindow.closed) return;
@@ -65,9 +67,15 @@
     const body = doc.createElement("div");
     body.id = "pip-body";
     body.style.cssText = "flex:1;overflow-y:auto;padding:12px 14px;scroll-behavior:smooth;";
+    // Detect manual scrolls so auto-scroll can pause for 5 seconds
+    body.addEventListener("scroll", () => {
+      pipUserScrolledAt = Date.now();
+    }, { passive: true });
     doc.body.appendChild(body);
 
     pipParsedLRC = null;
+    pipLastActiveIdx = -1;
+    pipUserScrolledAt = 0;
 
     const noLyrics = (text) => {
       body.style.cssText += "display:flex;align-items:center;justify-content:center;color:#666;font-style:italic;font-size:13px;";
@@ -104,16 +112,20 @@
     const body = pipWindow.document.getElementById("pip-body");
     if (!body) return;
     const activeIdx = getActiveLine(pipParsedLRC, currentTime - pipSongStartTime);
+    const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
     body.querySelectorAll("[data-line-index]").forEach((el, i) => {
       if (i === activeIdx) {
         Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: "rgba(160,196,255,0.12)" });
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (activeIdx !== pipLastActiveIdx && !userJustScrolled) {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
       } else if (i < activeIdx) {
         Object.assign(el.style, { color: "#444", fontWeight: "normal", fontSize: "14px", background: "" });
       } else {
         Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
       }
     });
+    pipLastActiveIdx = activeIdx;
   }
 
   async function openPiPWindow(state) {
