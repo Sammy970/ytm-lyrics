@@ -377,6 +377,7 @@ let overlayCurrentTimeAt = 0;
 let overlayIsPlaying = false;
 let overlayKaraokeRafId = null;
 let overlayKaraokeEnabled = true; // synced from chrome.storage
+let overlayBlurEnabled = true;
 
 let currentMode = "expanded";
 
@@ -571,7 +572,7 @@ async function renderOverlay(state) {
           margin: "4px 0",
           padding: "3px 6px",
           borderRadius: "4px",
-          transition: "color 0.2s, background 0.2s, font-size 0.2s",
+          transition: "color 0.2s, background 0.2s, font-size 0.2s, filter 0.4s",
           color: "#888",
           cursor: "pointer",
           lineHeight: "1.5",
@@ -672,20 +673,20 @@ function overlayKaraokeFrame() {
   const fillPct = Math.min(Math.max((songTime - lineStart) / Math.max(lineEnd - lineStart, 0.1), 0), 1) * 100;
 
   body.querySelectorAll("[data-line-index]").forEach((el, i) => {
+    const dist = Math.abs(i - activeIdx);
     if (i === activeIdx) {
       el.style.display = "";
       el.style.fontWeight = "bold";
       el.style.fontSize = "15px";
+      el.style.filter = "none";
       el.style.background = isCompact ? "" : overlayColHighlight;
       if (!isCompact && overlayKaraokeEnabled) {
-        // Karaoke fill mode
         el.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.2) ${fillPct}%)`;
         el.style.webkitBackgroundClip = "text";
         el.style.backgroundClip = "text";
         el.style.webkitTextFillColor = "transparent";
         el.style.color = "";
       } else {
-        // Plain highlight mode
         el.style.backgroundImage = "";
         el.style.webkitBackgroundClip = "";
         el.style.backgroundClip = "";
@@ -700,8 +701,10 @@ function overlayKaraokeFrame() {
       if (isCompact) {
         el.style.display = "none";
       } else {
+        const blurPx = overlayBlurEnabled ? Math.min(1 + (dist - 1) * 0.6, 2.5).toFixed(1) : 0;
         Object.assign(el.style, {
           display: "",
+          filter: blurPx > 0 ? `blur(${blurPx}px)` : "none",
           color: i < activeIdx ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.5)",
           fontWeight: "normal",
           fontSize: "14px",
@@ -734,15 +737,15 @@ if (typeof module !== "undefined" && module.exports) {
 
 // Browser-only: wire up Chrome runtime messaging
 if (typeof chrome !== "undefined" && chrome.runtime) {
-  // Load karaoke preference
-  chrome.storage.local.get("karaokeMode", (result) => {
+  // Load preferences
+  chrome.storage.local.get(["karaokeMode", "blurMode"], (result) => {
     overlayKaraokeEnabled = result.karaokeMode !== false;
+    overlayBlurEnabled    = result.blurMode    !== false;
   });
-  // Keep in sync if user changes it while overlay is open
+  // Keep in sync if user changes while overlay is open
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.karaokeMode) {
-      overlayKaraokeEnabled = changes.karaokeMode.newValue !== false;
-    }
+    if (changes.karaokeMode) overlayKaraokeEnabled = changes.karaokeMode.newValue !== false;
+    if (changes.blurMode)    overlayBlurEnabled    = changes.blurMode.newValue    !== false;
   });
 
   // Track the last known state so TOGGLE_OVERLAY can re-render it

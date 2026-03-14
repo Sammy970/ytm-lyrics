@@ -57,10 +57,16 @@
   let pipKaraokeRafId = null;
   let pipKaraokeEnabled = true; // synced from chrome.storage
 
-  // Load and keep karaoke preference in sync
-  chrome.storage.local.get("karaokeMode", (r) => { pipKaraokeEnabled = r.karaokeMode !== false; });
+  let pipBlurEnabled = true;
+
+  // Load and keep karaoke + blur preferences in sync
+  chrome.storage.local.get(["karaokeMode", "blurMode"], (r) => {
+    pipKaraokeEnabled = r.karaokeMode !== false;
+    pipBlurEnabled    = r.blurMode    !== false;
+  });
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.karaokeMode) pipKaraokeEnabled = changes.karaokeMode.newValue !== false;
+    if (changes.blurMode)    pipBlurEnabled    = changes.blurMode.newValue    !== false;
   });
 
   // ---------------------------------------------------------------------------
@@ -332,7 +338,7 @@
         pipParsedLRC.forEach((line, i) => {
           const p = doc.createElement("p");
           p.dataset.lineIndex = String(i);
-          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s;word-break:break-word;white-space:normal;";
+          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s,filter 0.4s;word-break:break-word;white-space:normal;";
           // Staggered fade-in: cap delay so it doesn't take forever on long lyrics
           p.classList.add("pip-line-fade");
           p.style.animationDelay = `${Math.min(i * 30, 600)}ms`;
@@ -412,19 +418,19 @@
     const fillPct = Math.min(Math.max((songTime - lineStart) / Math.max(lineEnd - lineStart, 0.1), 0), 1) * 100;
 
     body.querySelectorAll("[data-line-index]").forEach((el, i) => {
+      const dist = Math.abs(i - activeIdx);
       if (i === activeIdx) {
         el.style.background = colHighlight;
         el.style.fontWeight = "bold";
         el.style.fontSize = "15px";
+        el.style.filter = "none";
         if (pipKaraokeEnabled) {
-          // Karaoke fill mode
           el.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.2) ${fillPct}%)`;
           el.style.webkitBackgroundClip = "text";
           el.style.backgroundClip = "text";
           el.style.webkitTextFillColor = "transparent";
           el.style.color = "";
         } else {
-          // Plain highlight mode
           el.style.backgroundImage = "";
           el.style.webkitBackgroundClip = "";
           el.style.backgroundClip = "";
@@ -436,6 +442,8 @@
         el.style.webkitBackgroundClip = "";
         el.style.backgroundClip = "";
         el.style.webkitTextFillColor = "";
+        const blurPx = pipBlurEnabled ? Math.min(1 + (dist - 1) * 0.6, 2.5).toFixed(1) : 0;
+        el.style.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
         Object.assign(el.style, {
           color: i < activeIdx ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.35)",
           fontWeight: "normal",
