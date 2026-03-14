@@ -9,6 +9,7 @@ let appState = {
   lyrics: null,          // string | null
   lyricsStatus: "idle",  // "idle" | "loading" | "found" | "not_found" | "error"
   songStartTime: 0,      // video.currentTime when the current track started
+  isPlaying: false,      // whether the video is currently playing
 };
 
 // ---------------------------------------------------------------------------
@@ -325,15 +326,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "TIME_UPDATE") {
-    // Forward playback time to all tabs AND the lyrics window (extension pages)
-    const syncMsg = { type: "SYNC_UPDATE", currentTime: message.currentTime };
+    // Track play state so it's available in GET_STATE responses
+    if (typeof message.isPlaying === "boolean") {
+      appState.isPlaying = message.isPlaying;
+    }
+    // Forward playback time + play state to all tabs AND the lyrics window
+    const syncMsg = { type: "SYNC_UPDATE", currentTime: message.currentTime, isPlaying: appState.isPlaying };
     chrome.tabs.query({}, (tabs) => {
       for (const tab of tabs) {
         chrome.tabs.sendMessage(tab.id, syncMsg, () => { void chrome.runtime.lastError; });
       }
     });
-    // Also broadcast to extension pages (e.g. the floating lyrics window)
     chrome.runtime.sendMessage(syncMsg, () => { void chrome.runtime.lastError; });
+    return false;
+  }
+
+  if (message.type === "PLAY_STATE") {
+    // Immediate play/pause broadcast (fires faster than the 500ms TIME_UPDATE interval)
+    if (typeof message.isPlaying === "boolean") {
+      appState.isPlaying = message.isPlaying;
+    }
+    const playMsg = { type: "SYNC_UPDATE", currentTime: null, isPlaying: appState.isPlaying };
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, playMsg, () => { void chrome.runtime.lastError; });
+      }
+    });
+    chrome.runtime.sendMessage(playMsg, () => { void chrome.runtime.lastError; });
+    return false;
+  }
+
+  if (message.type === "MEDIA_CONTROL") {
+    // Forward to the YTM tab where the actual player lives
+    chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+      if (tabs && tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: "MEDIA_CONTROL", action: message.action }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    });
     return false;
   }
 

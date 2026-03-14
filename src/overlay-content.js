@@ -85,6 +85,29 @@ const BODY_STYLES = {
   wordBreak: "break-word",
 };
 
+const CONTROLS_STYLES = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  padding: "6px 10px",
+  backgroundColor: "#16213e",
+  borderTop: "1px solid #1e2d50",
+  flexShrink: "0",
+};
+
+const CTRL_BTN_STYLES = {
+  background: "none",
+  border: "none",
+  color: "#a0c4ff",
+  fontSize: "16px",
+  cursor: "pointer",
+  padding: "3px 10px",
+  borderRadius: "5px",
+  lineHeight: "1",
+  flexShrink: "0",
+};
+
 const STATUS_STYLES = {
   padding: "12px 14px",
   color: "#aaa",
@@ -264,13 +287,33 @@ let currentMode = "expanded";
  */
 function applyMode(overlay) {
   if (currentMode === "compact") {
-    overlay.style.maxHeight = "80px";
+    // No fixed maxHeight — let content dictate height (header + active line + controls)
+    overlay.style.maxHeight = "";
     const body = overlay.querySelector("[data-role='lyrics-body']");
-    if (body) body.style.overflowY = "hidden";
+    if (body) {
+      body.style.overflowY = "hidden";
+      body.style.padding = "6px 14px";
+      body.dataset.compact = "true";
+      // Hide all lines; SYNC_UPDATE will show only the active one
+      body.querySelectorAll("[data-line-index]").forEach((el) => {
+        el.style.display = "none";
+        el.style.whiteSpace = "";
+        el.style.overflow = "";
+        el.style.textOverflow = "";
+      });
+    }
   } else {
     overlay.style.maxHeight = "480px";
     const body = overlay.querySelector("[data-role='lyrics-body']");
-    if (body) body.style.overflowY = "auto";
+    if (body) {
+      body.style.overflowY = "auto";
+      body.style.padding = "10px";
+      delete body.dataset.compact;
+      // Restore all lines visible
+      body.querySelectorAll("[data-line-index]").forEach((el) => {
+        el.style.display = "";
+      });
+    }
   }
 }
 
@@ -346,7 +389,6 @@ function renderOverlay(state) {
 
   // --- Body ---
   if (nowPlaying === null) {
-    // No song playing
     const msg = document.createElement("div");
     applyStyles(msg, STATUS_STYLES);
     msg.textContent = "No song currently playing";
@@ -360,19 +402,14 @@ function renderOverlay(state) {
     spinner.setAttribute("data-testid", "loading-spinner");
     spinner.textContent = "⏳ Loading lyrics…";
     overlay.appendChild(spinner);
-    return;
-  }
-
-  if (lyricsStatus === "found" && lyrics) {
+  } else if (lyricsStatus === "found" && lyrics) {
     const body = document.createElement("div");
     applyStyles(body, BODY_STYLES);
     body.dataset.role = "lyrics-body";
 
-    // Try to parse as LRC (synced lyrics)
     parsedLRC = parseLRC(lyrics);
 
     if (parsedLRC) {
-      // Render each line as a separate <p> for highlighting
       parsedLRC.forEach((line, i) => {
         const p = document.createElement("p");
         p.dataset.lineIndex = String(i);
@@ -393,44 +430,70 @@ function renderOverlay(state) {
         body.appendChild(p);
       });
     } else {
-      // Plain lyrics — just show as text
       body.textContent = lyrics;
     }
 
-    // Detect manual scrolls so auto-scroll can pause for 5 seconds
     body.addEventListener("scroll", () => {
       overlayUserScrolledAt = Date.now();
     }, { passive: true });
 
     overlay.appendChild(body);
     applyMode(overlay);
-    // Reset tracking state whenever lyrics are freshly rendered
     overlayLastActiveIdx = -1;
     overlayUserScrolledAt = 0;
-    return;
-  }
-
-  if (lyricsStatus === "not_found") {
+  } else if (lyricsStatus === "not_found") {
     const msg = document.createElement("div");
     applyStyles(msg, STATUS_STYLES);
     msg.textContent = "Lyrics not found";
     overlay.appendChild(msg);
-    return;
-  }
-
-  if (lyricsStatus === "error") {
+  } else if (lyricsStatus === "error") {
     const msg = document.createElement("div");
     applyStyles(msg, STATUS_STYLES);
     msg.textContent = "Error fetching lyrics";
     overlay.appendChild(msg);
-    return;
+  } else {
+    const msg = document.createElement("div");
+    applyStyles(msg, STATUS_STYLES);
+    msg.textContent = "Waiting for a song to play…";
+    overlay.appendChild(msg);
   }
 
-  // idle / fallback
-  const msg = document.createElement("div");
-  applyStyles(msg, STATUS_STYLES);
-  msg.textContent = "Waiting for a song to play…";
-  overlay.appendChild(msg);
+  // --- Controls footer (shown whenever a song is playing) ---
+  const controls = document.createElement("div");
+  applyStyles(controls, CONTROLS_STYLES);
+
+  function makeOverlayCtrlBtn(icon, action, label, extraStyles) {
+    const btn = document.createElement("button");
+    applyStyles(btn, CTRL_BTN_STYLES);
+    if (extraStyles) applyStyles(btn, extraStyles);
+    btn.textContent = icon;
+    btn.setAttribute("aria-label", label);
+    btn.addEventListener("mouseover", () => { btn.style.background = "rgba(160,196,255,0.15)"; });
+    btn.addEventListener("mouseout",  () => { btn.style.background = "none"; });
+    btn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action });
+    });
+    return btn;
+  }
+
+  controls.appendChild(makeOverlayCtrlBtn("⏮", "prev", "Previous"));
+
+  const playPauseBtn = document.createElement("button");
+  applyStyles(playPauseBtn, CTRL_BTN_STYLES);
+  applyStyles(playPauseBtn, { fontSize: "18px", padding: "3px 12px" });
+  playPauseBtn.id = "overlay-play-btn";
+  playPauseBtn.setAttribute("aria-label", "Play / Pause");
+  playPauseBtn.textContent = (state && state.isPlaying) ? "⏸" : "▶";
+  playPauseBtn.addEventListener("mouseover", () => { playPauseBtn.style.background = "rgba(160,196,255,0.15)"; });
+  playPauseBtn.addEventListener("mouseout",  () => { playPauseBtn.style.background = "none"; });
+  playPauseBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action: "play-pause" });
+  });
+  controls.appendChild(playPauseBtn);
+
+  controls.appendChild(makeOverlayCtrlBtn("⏭", "next", "Next"));
+
+  overlay.appendChild(controls);
 }
 
 // Export for testability (Node/Jest environment)
@@ -458,31 +521,49 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
         parsedLRCSongStartTime = message.state.songStartTime || 0;
       }
     } else if (message.type === "SYNC_UPDATE") {
-      if (parsedLRC) {
+      // Update play/pause icon live without re-rendering the whole overlay
+      if (typeof message.isPlaying === "boolean") {
+        const playBtn = document.getElementById("overlay-play-btn");
+        if (playBtn) playBtn.textContent = message.isPlaying ? "⏸" : "▶";
+      }
+      if (parsedLRC && message.currentTime !== null) {
         const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
         if (body) {
+          const isCompact = body.dataset.compact === "true";
           const songTime = message.currentTime - parsedLRCSongStartTime;
           const activeIdx = getActiveLine(parsedLRC, songTime);
           const lines = body.querySelectorAll("[data-line-index]");
           const userJustScrolled = (Date.now() - overlayUserScrolledAt) < 5000;
+          let activeEl = null;
           lines.forEach((el, i) => {
             if (i === activeIdx) {
+              activeEl = el;
               Object.assign(el.style, {
                 color: "#ffffff",
                 fontWeight: "bold",
                 fontSize: "15px",
-                background: "rgba(160,196,255,0.12)",
+                background: isCompact ? "" : "rgba(160,196,255,0.12)",
+                display: "",
               });
-              // Only auto-scroll when the active line changes AND user isn't manually browsing
-              if (activeIdx !== overlayLastActiveIdx && !userJustScrolled) {
-                el.scrollIntoView({ block: "center", behavior: "smooth" });
-              }
-            } else if (i < activeIdx) {
-              Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
             } else {
-              Object.assign(el.style, { color: "#888", fontWeight: "normal", fontSize: "14px", background: "" });
+              if (isCompact) {
+                el.style.display = "none";
+              } else {
+                Object.assign(el.style, {
+                  display: "",
+                  color: i < activeIdx ? "#555" : "#888",
+                  fontWeight: "normal",
+                  fontSize: "14px",
+                  background: "",
+                });
+              }
             }
           });
+          // Always keep active line centered in the scroll container (non-compact only)
+          if (!isCompact && activeEl && !userJustScrolled) {
+            const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
+            body.scrollTo({ top: targetTop, behavior: "smooth" });
+          }
           overlayLastActiveIdx = activeIdx;
         }
       }

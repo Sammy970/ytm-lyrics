@@ -55,13 +55,20 @@
     const doc = pipWindow.document;
     doc.body.innerHTML = "";
 
-    const title = state && state.nowPlaying
-      ? `${state.nowPlaying.title} — ${state.nowPlaying.artist}`
-      : "YT Music Lyrics";
-
+    // --- Header: track info ---
     const header = doc.createElement("div");
-    header.style.cssText = "background:#16213e;padding:8px 12px;flex-shrink:0;border-bottom:1px solid #1e2d50;font-size:12px;font-weight:bold;color:#a0c4ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-    header.textContent = title;
+    header.style.cssText = "background:#16213e;padding:8px 12px;flex-shrink:0;border-bottom:1px solid #1e2d50;";
+
+    const trackTitle = doc.createElement("div");
+    trackTitle.style.cssText = "font-size:12px;font-weight:bold;color:#a0c4ff;word-break:break-word;";
+    trackTitle.textContent = state && state.nowPlaying ? state.nowPlaying.title : "YT Music Lyrics";
+
+    const trackArtist = doc.createElement("div");
+    trackArtist.style.cssText = "font-size:11px;color:#8899aa;margin-top:2px;word-break:break-word;";
+    trackArtist.textContent = state && state.nowPlaying ? state.nowPlaying.artist : "";
+
+    header.appendChild(trackTitle);
+    if (state && state.nowPlaying) header.appendChild(trackArtist);
     doc.body.appendChild(header);
 
     const body = doc.createElement("div");
@@ -93,7 +100,7 @@
         pipParsedLRC.forEach((line, i) => {
           const p = doc.createElement("p");
           p.dataset.lineIndex = String(i);
-          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:#555;cursor:pointer;transition:color 0.2s,background 0.2s;";
+          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:#555;cursor:pointer;transition:color 0.2s,background 0.2s;word-break:break-word;white-space:normal;";
           p.textContent = line.text || "♪";
           p.addEventListener("click", () => {
             chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time + pipSongStartTime });
@@ -105,26 +112,78 @@
         body.textContent = state.lyrics;
       }
     }
+
+    // --- Controls footer: ⏮  ⏯  ⏭ ---
+    const footer = doc.createElement("div");
+    footer.id = "pip-controls";
+    footer.style.cssText = "background:#16213e;border-top:1px solid #1e2d50;flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;";
+
+    const btnStyle = "background:none;border:none;color:#a0c4ff;font-size:20px;cursor:pointer;padding:4px 10px;border-radius:6px;transition:background 0.15s;line-height:1;";
+    const btnHover = "background:rgba(160,196,255,0.12);";
+
+    function makeCtrlBtn(icon, action, title) {
+      const btn = doc.createElement("button");
+      btn.textContent = icon;
+      btn.title = title;
+      btn.style.cssText = btnStyle;
+      btn.addEventListener("mouseover", () => { btn.style.background = "rgba(160,196,255,0.12)"; });
+      btn.addEventListener("mouseout",  () => { btn.style.background = "none"; });
+      btn.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action });
+      });
+      return btn;
+    }
+
+    footer.appendChild(makeCtrlBtn("⏮", "prev", "Previous"));
+
+    // Play/pause button — id so syncPiP can update its icon live
+    const playBtn = doc.createElement("button");
+    playBtn.id = "pip-play-btn";
+    playBtn.title = "Play / Pause";
+    playBtn.style.cssText = btnStyle + "font-size:24px;";
+    playBtn.textContent = (state && state.isPlaying) ? "⏸" : "▶";
+    playBtn.addEventListener("mouseover", () => { playBtn.style.background = "rgba(160,196,255,0.12)"; });
+    playBtn.addEventListener("mouseout",  () => { playBtn.style.background = "none"; });
+    playBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action: "play-pause" });
+    });
+    footer.appendChild(playBtn);
+
+    footer.appendChild(makeCtrlBtn("⏭", "next", "Next"));
+
+    doc.body.appendChild(footer);
   }
 
-  function syncPiP(currentTime) {
-    if (!pipWindow || pipWindow.closed || !pipParsedLRC) return;
+  function syncPiP(currentTime, isPlaying) {
+    if (!pipWindow || pipWindow.closed) return;
+
+    // Update play/pause button icon
+    const playBtn = pipWindow.document.getElementById("pip-play-btn");
+    if (playBtn && typeof isPlaying === "boolean") {
+      playBtn.textContent = isPlaying ? "⏸" : "▶";
+    }
+
+    if (!pipParsedLRC || currentTime === null) return;
     const body = pipWindow.document.getElementById("pip-body");
     if (!body) return;
     const activeIdx = getActiveLine(pipParsedLRC, currentTime - pipSongStartTime);
     const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
+    let activeEl = null;
     body.querySelectorAll("[data-line-index]").forEach((el, i) => {
       if (i === activeIdx) {
+        activeEl = el;
         Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: "rgba(160,196,255,0.12)" });
-        if (activeIdx !== pipLastActiveIdx && !userJustScrolled) {
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
       } else if (i < activeIdx) {
         Object.assign(el.style, { color: "#444", fontWeight: "normal", fontSize: "14px", background: "" });
       } else {
         Object.assign(el.style, { color: "#555", fontWeight: "normal", fontSize: "14px", background: "" });
       }
     });
+    // Always keep active line centered in the scroll container
+    if (activeEl && !userJustScrolled) {
+      const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
+      body.scrollTo({ top: targetTop, behavior: "smooth" });
+    }
     pipLastActiveIdx = activeIdx;
   }
 
@@ -139,10 +198,14 @@
     }
     try {
       pipWindow = await window.documentPictureInPicture.requestWindow({
-        width: 340,
-        height: 520,
+        width: 320,
+        height: 420,
       });
-      pipWindow.document.body.style.cssText = "margin:0;padding:0;background:#0d0d1a;color:#e0e0e0;font-family:Arial,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden;user-select:none;";
+      pipWindow.document.body.style.cssText = "margin:0;padding:0;background:#0d0d1a;color:#e0e0e0;font-family:Arial,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden;user-select:none;box-sizing:border-box;";
+      // Make all elements use border-box so layout reflows correctly on resize
+      const styleEl = pipWindow.document.createElement("style");
+      styleEl.textContent = "*{box-sizing:border-box;}";
+      pipWindow.document.head.appendChild(styleEl);
       renderPiP(state);
       pipWindow.addEventListener("pagehide", () => {
         pipWindow = null;
@@ -276,7 +339,14 @@
     return true;
   }
 
-  // --- Message listener: seek + PiP ---
+  // --- Media control helpers ---
+  // Clicks the matching button in YTM's player bar by its aria-label.
+  function clickPlayerButton(ariaLabel) {
+    const btn = document.querySelector(`ytmusic-player-bar [aria-label="${ariaLabel}"]`);
+    if (btn) btn.click();
+  }
+
+  // --- Message listener: seek + PiP + media controls ---
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'SEEK_TO') {
       const video = document.querySelector('video');
@@ -289,17 +359,49 @@
       pipSongStartTime = (message.state && message.state.songStartTime) || 0;
       if (pipWindow && !pipWindow.closed) renderPiP(message.state);
     } else if (message.type === "SYNC_UPDATE") {
-      syncPiP(message.currentTime);
+      syncPiP(message.currentTime, message.isPlaying);
+    } else if (message.type === "MEDIA_CONTROL") {
+      const video = document.querySelector('video');
+      if (message.action === "play-pause") {
+        if (video) video.paused ? video.play() : video.pause();
+      } else if (message.action === "next") {
+        clickPlayerButton("Next");
+      } else if (message.action === "prev") {
+        clickPlayerButton("Previous");
+      }
     }
   });
+
+  // --- Playback state broadcast ---
+  // Send play/pause state changes immediately so the PiP button stays in sync.
+  function broadcastPlayState() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    chrome.runtime.sendMessage({ type: 'PLAY_STATE', isPlaying: !video.paused }, () => {
+      void chrome.runtime.lastError;
+    });
+  }
+
+  // Attach play/pause listeners once the video element is ready
+  function attachVideoListeners() {
+    const video = document.querySelector('video');
+    if (!video || video.dataset.ytmLyricsListening) return;
+    video.dataset.ytmLyricsListening = "1";
+    video.addEventListener("play",  broadcastPlayState);
+    video.addEventListener("pause", broadcastPlayState);
+  }
 
   // --- Playback time sync ---
   // Send current video time every 500ms so the overlay can highlight the active lyric line.
   setInterval(() => {
+    attachVideoListeners();
     const video = document.querySelector('video');
-    if (video && !video.paused) {
-      chrome.runtime.sendMessage({ type: 'TIME_UPDATE', currentTime: video.currentTime });
-    }
+    if (!video) return;
+    chrome.runtime.sendMessage({
+      type: 'TIME_UPDATE',
+      currentTime: video.currentTime,
+      isPlaying: !video.paused,
+    });
   }, 500);
 
   // --- Polling fallback ---
