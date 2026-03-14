@@ -194,6 +194,14 @@ function applyOverlayHeaderGradient(color) {
     #${OVERLAY_ID} #overlay-thumb {
       transition: transform 0.05s linear, box-shadow 0.05s linear;
     }
+    @keyframes overlay-line-in {
+      from { opacity: 0; transform: translateY(5px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    #${OVERLAY_ID} .overlay-line-fade {
+      opacity: 0;
+      animation: overlay-line-in 0.3s ease forwards;
+    }
   `;
 }
 
@@ -557,6 +565,8 @@ async function renderOverlay(state) {
         p.dataset.lineIndex = String(i);
         p.textContent = line.text || "♪";
         p.title = "Click to jump here";
+        p.classList.add("overlay-line-fade");
+        p.style.animationDelay = `${Math.min(i * 25, 500)}ms`;
         Object.assign(p.style, {
           margin: "4px 0",
           padding: "3px 6px",

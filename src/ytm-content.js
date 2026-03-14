@@ -231,6 +231,14 @@
       #pip-thumb {
         transition: transform 0.05s linear, box-shadow 0.05s linear;
       }
+      @keyframes pip-line-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .pip-line-fade {
+        opacity: 0;
+        animation: pip-line-in 0.35s ease forwards;
+      }
     `;
     doc.head.appendChild(style);
   }
@@ -325,6 +333,9 @@
           const p = doc.createElement("p");
           p.dataset.lineIndex = String(i);
           p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s;word-break:break-word;white-space:normal;";
+          // Staggered fade-in: cap delay so it doesn't take forever on long lyrics
+          p.classList.add("pip-line-fade");
+          p.style.animationDelay = `${Math.min(i * 30, 600)}ms`;
           p.textContent = line.text || "♪";
           p.addEventListener("click", () => {
             chrome.runtime.sendMessage({ type: "SEEK_TO", time: line.time + pipSongStartTime });
