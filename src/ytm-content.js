@@ -58,6 +58,7 @@
   let pipKaraokeEnabled = true; // synced from chrome.storage
 
   let pipBlurEnabled = true;
+  let pipImmersive = false;
 
   // Load and keep karaoke + blur preferences in sync
   chrome.storage.local.get(["karaokeMode", "blurMode"], (r) => {
@@ -116,12 +117,25 @@
       const scale = 1 + smoothedEnergy * 0.18; // max ~1.18× at full bass
       const glow = Math.round(smoothedEnergy * 255);
 
-      // Update PiP thumbnail
+      // Update PiP thumbnail + immersive background
       if (pipWindow && !pipWindow.closed) {
         const thumb = pipWindow.document.getElementById("pip-thumb");
         if (thumb) {
           thumb.style.transform = `scale(${scale.toFixed(3)})`;
           thumb.style.boxShadow = `0 2px ${8 + Math.round(smoothedEnergy * 20)}px rgba(${glow},${Math.round(glow*0.6)},${Math.round(glow*0.9)},${(0.3 + smoothedEnergy * 0.6).toFixed(2)})`;
+        }
+        // Pulse the immersive thumbnail + bg brightness with bass
+        if (pipImmersive) {
+          const immThumb = pipWindow.document.getElementById("pip-immersive-thumb");
+          if (immThumb) {
+            immThumb.style.transform = `scale(${scale.toFixed(3)})`;
+            immThumb.style.boxShadow = `0 8px ${16 + Math.round(smoothedEnergy * 32)}px rgba(${glow},${Math.round(glow*0.6)},${Math.round(glow*0.9)},${(0.4 + smoothedEnergy * 0.5).toFixed(2)})`;
+          }
+          const immBg = pipWindow.document.getElementById("pip-immersive-bg");
+          if (immBg) {
+            const brightness = (0.45 + smoothedEnergy * 0.2).toFixed(3);
+            immBg.style.filter = `blur(28px) saturate(1.6) brightness(${brightness})`;
+          }
         }
       }
 
@@ -245,6 +259,119 @@
         opacity: 0;
         animation: pip-line-in 0.35s ease forwards;
       }
+      #pip-immersive {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.5s ease;
+        z-index: 999;
+        text-align: center;
+        overflow: hidden;
+      }
+      #pip-immersive.active {
+        opacity: 1;
+        pointer-events: all;
+      }
+      /* Blurred album art sits as a full-bleed background */
+      #pip-immersive-bg {
+        position: absolute;
+        inset: -20px;
+        background-size: cover;
+        background-position: center;
+        filter: blur(28px) saturate(1.6) brightness(0.45);
+        transform: scale(1.08);
+        transition: background-image 1s ease;
+        z-index: 0;
+      }
+      /* Dark vignette overlay on top of the blurred cover */
+      #pip-immersive-vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at center, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.65) 100%);
+        z-index: 1;
+      }
+      /* All content sits above the bg layers */
+      #pip-immersive-content {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        max-width: 480px;
+      }
+      /* Small album art thumbnail above the lyric */
+      #pip-immersive-thumb {
+        width: 72px;
+        height: 72px;
+        border-radius: 10px;
+        object-fit: cover;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        margin-bottom: 20px;
+        transition: transform 0.05s linear, box-shadow 0.05s linear;
+      }
+      #pip-immersive-line {
+        font-size: 26px;
+        font-weight: bold;
+        line-height: 1.4;
+        word-break: break-word;
+        white-space: normal;
+        max-width: 100%;
+        text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+        transition: filter 0.3s;
+      }
+      /* Top-right HUD buttons */
+      #pip-immersive-hud {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        gap: 6px;
+        z-index: 3;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      #pip-immersive:hover #pip-immersive-hud {
+        opacity: 1;
+      }
+      .pip-hud-btn {
+        background: rgba(0,0,0,0.35);
+        backdrop-filter: blur(6px);
+        border: none;
+        color: rgba(255,255,255,0.7);
+        font-size: 16px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        transition: background 0.2s, color 0.2s;
+      }
+      .pip-hud-btn:hover {
+        background: rgba(0,0,0,0.6);
+        color: #fff;
+      }
+      #pip-immersive-controls {
+        display: flex;
+        gap: 16px;
+        margin-top: 28px;
+        opacity: 0;
+        transition: opacity 0.3s;
+        position: relative;
+        z-index: 2;
+      }
+      #pip-immersive:hover #pip-immersive-controls {
+        opacity: 1;
+      }
     `;
     doc.head.appendChild(style);
   }
@@ -308,7 +435,112 @@
     trackInfo.appendChild(trackTitle);
     if (state && state.nowPlaying) trackInfo.appendChild(trackArtist);
     header.appendChild(trackInfo);
+
+    // Immersive mode toggle button in header
+    const immersiveBtn = doc.createElement("button");
+    immersiveBtn.id = "pip-immersive-btn";
+    immersiveBtn.title = "Immersive mode";
+    immersiveBtn.style.cssText = `background:none;border:none;color:rgba(255,255,255,0.5);font-size:15px;cursor:pointer;padding:4px 6px;border-radius:4px;flex-shrink:0;line-height:1;transition:color 0.2s;`;
+    immersiveBtn.textContent = "⛶";
+    immersiveBtn.addEventListener("mouseover", () => { immersiveBtn.style.color = "#fff"; });
+    immersiveBtn.addEventListener("mouseout",  () => { immersiveBtn.style.color = pipImmersive ? "#fff" : "rgba(255,255,255,0.5)"; });
+    immersiveBtn.addEventListener("click", () => toggleImmersive(doc, color));
+    header.appendChild(immersiveBtn);
+
     doc.body.appendChild(header);
+
+    // --- Immersive overlay layer (sits above everything, toggled on/off) ---
+    const immersiveLayer = doc.createElement("div");
+    immersiveLayer.id = "pip-immersive";
+    if (pipImmersive) immersiveLayer.classList.add("active");
+
+    // Blurred album art background
+    const immBg = doc.createElement("div");
+    immBg.id = "pip-immersive-bg";
+    if (thumbUrl) {
+      // Album art as blurred full-bleed background; color gradient shows through as tint
+      immBg.style.backgroundImage = `url(${thumbUrl})`;
+      immBg.style.backgroundColor = `rgb(${Math.round(r*0.2)},${Math.round(g*0.15)},${Math.round(b*0.3)})`;
+    } else {
+      // No thumbnail: fallback to album color gradient
+      immBg.style.background = `linear-gradient(135deg, rgb(${Math.round(r*0.4)},${Math.round(g*0.3)},${Math.round(b*0.55)}), rgb(${Math.round(r*0.2)},${Math.round(g*0.3)},${Math.round(b*0.4)}))`;
+    }
+    immersiveLayer.appendChild(immBg);
+
+    // Dark vignette on top of blurred bg
+    const immVignette = doc.createElement("div");
+    immVignette.id = "pip-immersive-vignette";
+    immersiveLayer.appendChild(immVignette);
+
+    // HUD: fullscreen + exit (top-right, visible on hover)
+    const hud = doc.createElement("div");
+    hud.id = "pip-immersive-hud";
+
+    const fsBtn = doc.createElement("button");
+    fsBtn.className = "pip-hud-btn";
+    fsBtn.title = "Toggle fullscreen";
+    fsBtn.textContent = "⛶";
+    fsBtn.addEventListener("click", () => {
+      if (!pipWindow.document.fullscreenElement) {
+        pipWindow.document.documentElement.requestFullscreen().catch(() => {});
+        fsBtn.textContent = "⊡";
+      } else {
+        pipWindow.document.exitFullscreen().catch(() => {});
+        fsBtn.textContent = "⛶";
+      }
+    });
+    pipWindow.document.addEventListener("fullscreenchange", () => {
+      fsBtn.textContent = pipWindow.document.fullscreenElement ? "⊡" : "⛶";
+    });
+    hud.appendChild(fsBtn);
+
+    const exitBtn = doc.createElement("button");
+    exitBtn.className = "pip-hud-btn";
+    exitBtn.title = "Exit immersive";
+    exitBtn.textContent = "✕";
+    exitBtn.addEventListener("click", () => {
+      if (pipWindow.document.fullscreenElement) pipWindow.document.exitFullscreen().catch(() => {});
+      toggleImmersive(doc, color);
+    });
+    hud.appendChild(exitBtn);
+    immersiveLayer.appendChild(hud);
+
+    // Central content: small thumb + big lyric line
+    const immContent = doc.createElement("div");
+    immContent.id = "pip-immersive-content";
+
+    if (thumbUrl) {
+      const immThumb = doc.createElement("img");
+      immThumb.id = "pip-immersive-thumb";
+      immThumb.src = thumbUrl;
+      immThumb.alt = "";
+      immContent.appendChild(immThumb);
+    }
+
+    const immersiveLine = doc.createElement("div");
+    immersiveLine.id = "pip-immersive-line";
+    immersiveLine.textContent = "";
+    immContent.appendChild(immersiveLine);
+
+    // Immersive controls (shown on hover)
+    const immCtrl = doc.createElement("div");
+    immCtrl.id = "pip-immersive-controls";
+    const immBtnStyle = `background:rgba(0,0,0,0.3);backdrop-filter:blur(6px);border:none;color:rgba(255,255,255,0.9);font-size:22px;cursor:pointer;padding:10px 20px;border-radius:10px;transition:background 0.2s;`;
+    ["⏮","⏸▶","⏭"].forEach((icon, idx) => {
+      const b = doc.createElement("button");
+      b.style.cssText = immBtnStyle;
+      b.textContent = icon === "⏸▶" ? ((state && state.isPlaying) ? "⏸" : "▶") : icon;
+      if (icon === "⏸▶") b.id = "pip-immersive-play";
+      b.addEventListener("mouseover", () => { b.style.background = "rgba(0,0,0,0.55)"; });
+      b.addEventListener("mouseout",  () => { b.style.background = "rgba(0,0,0,0.3)"; });
+      const action = ["prev", "play-pause", "next"][idx];
+      b.addEventListener("click", () => chrome.runtime.sendMessage({ type: "MEDIA_CONTROL", action }));
+      immCtrl.appendChild(b);
+    });
+    immContent.appendChild(immCtrl);
+    immersiveLayer.appendChild(immContent);
+
+    doc.body.appendChild(immersiveLayer);
 
     const body = doc.createElement("div");
     body.id = "pip-body";
@@ -398,6 +630,17 @@
     doc.body.appendChild(footer);
   }
 
+  function toggleImmersive(doc, color) {
+    pipImmersive = !pipImmersive;
+    const layer = doc.getElementById("pip-immersive");
+    const btn   = doc.getElementById("pip-immersive-btn");
+    if (layer) layer.classList.toggle("active", pipImmersive);
+    if (btn) {
+      btn.style.color = pipImmersive ? "#fff" : "rgba(255,255,255,0.5)";
+      btn.title = pipImmersive ? "Exit immersive" : "Immersive mode";
+    }
+  }
+
   function pipKaraokeFrame() {
     if (!pipWindow || pipWindow.closed) { pipKaraokeRafId = null; return; }
     if (!pipParsedLRC) { pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame); return; }
@@ -453,7 +696,28 @@
       }
     });
 
-    // Scroll: only when active line changes
+    // --- Immersive layer update ---
+    const immLine = pipWindow.document.getElementById("pip-immersive-line");
+    const immPlay = pipWindow.document.getElementById("pip-immersive-play");
+    if (immLine && pipParsedLRC[activeIdx]) {
+      immLine.textContent = pipParsedLRC[activeIdx].text || "♪";
+      // Apply karaoke fill to immersive line too
+      if (pipKaraokeEnabled) {
+        immLine.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.3) ${fillPct}%)`;
+        immLine.style.webkitBackgroundClip = "text";
+        immLine.style.backgroundClip = "text";
+        immLine.style.webkitTextFillColor = "transparent";
+      } else {
+        immLine.style.backgroundImage = "";
+        immLine.style.webkitBackgroundClip = "";
+        immLine.style.backgroundClip = "";
+        immLine.style.webkitTextFillColor = "";
+        immLine.style.color = "#fff";
+      }
+    }
+    if (immPlay) immPlay.textContent = pipIsPlaying ? "⏸" : "▶";
+
+    // Scroll normal view: only when active line changes
     if (activeIdx !== pipLastActiveIdx) {
       const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
       const activeEl = body.querySelector(`[data-line-index="${activeIdx}"]`);
