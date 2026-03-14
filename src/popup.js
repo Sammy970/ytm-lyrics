@@ -37,6 +37,16 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
       statusMsg.textContent = getStatusMessage(state);
     });
 
+    // --- Karaoke setting ---
+    const karaokeToggle = document.getElementById("karaoke-toggle");
+    chrome.storage.local.get("karaokeMode", (result) => {
+      // Default on if never set
+      karaokeToggle.checked = result.karaokeMode !== false;
+    });
+    karaokeToggle.addEventListener("change", () => {
+      chrome.storage.local.set({ karaokeMode: karaokeToggle.checked });
+    });
+
     toggleBtn.addEventListener("click", () => {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs && tabs[0] && tabs[0].id != null) {

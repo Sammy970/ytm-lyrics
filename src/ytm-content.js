@@ -49,7 +49,19 @@
   let pipSongStartTime = 0;
   let pipLastActiveIdx = -1;
   let pipUserScrolledAt = 0;
-  let pipRenderGeneration = 0; // incremented on each renderPiP call to cancel stale renders
+  let pipRenderGeneration = 0;
+  // Live playback tracking for 60fps karaoke fill interpolation
+  let pipCurrentTime = 0;
+  let pipCurrentTimeAt = 0;
+  let pipIsPlaying = false;
+  let pipKaraokeRafId = null;
+  let pipKaraokeEnabled = true; // synced from chrome.storage
+
+  // Load and keep karaoke preference in sync
+  chrome.storage.local.get("karaokeMode", (r) => { pipKaraokeEnabled = r.karaokeMode !== false; });
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.karaokeMode) pipKaraokeEnabled = changes.karaokeMode.newValue !== false;
+  });
 
   // ---------------------------------------------------------------------------
   // Album art color extraction
@@ -265,6 +277,73 @@
     doc.body.appendChild(footer);
   }
 
+  function pipKaraokeFrame() {
+    if (!pipWindow || pipWindow.closed) { pipKaraokeRafId = null; return; }
+    if (!pipParsedLRC) { pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame); return; }
+
+    const body = pipWindow.document.getElementById("pip-body");
+    if (!body) { pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame); return; }
+
+    // Interpolate current song time at 60fps using drift from last known value
+    const elapsed = pipIsPlaying ? (Date.now() - pipCurrentTimeAt) / 1000 : 0;
+    const songTime = (pipCurrentTime + elapsed) - pipSongStartTime;
+    const activeIdx = getActiveLine(pipParsedLRC, songTime);
+
+    const colHighlight = body.dataset.colHighlight || "rgba(160,196,255,0.18)";
+    const colAccent = body.dataset.colAccent || "#a0c4ff";
+
+    const lineStart = pipParsedLRC[activeIdx].time;
+    const lineEnd = pipParsedLRC[activeIdx + 1] ? pipParsedLRC[activeIdx + 1].time : lineStart + 5;
+    const fillPct = Math.min(Math.max((songTime - lineStart) / Math.max(lineEnd - lineStart, 0.1), 0), 1) * 100;
+
+    body.querySelectorAll("[data-line-index]").forEach((el, i) => {
+      if (i === activeIdx) {
+        el.style.background = colHighlight;
+        el.style.fontWeight = "bold";
+        el.style.fontSize = "15px";
+        if (pipKaraokeEnabled) {
+          // Karaoke fill mode
+          el.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.2) ${fillPct}%)`;
+          el.style.webkitBackgroundClip = "text";
+          el.style.backgroundClip = "text";
+          el.style.webkitTextFillColor = "transparent";
+          el.style.color = "";
+        } else {
+          // Plain highlight mode
+          el.style.backgroundImage = "";
+          el.style.webkitBackgroundClip = "";
+          el.style.backgroundClip = "";
+          el.style.webkitTextFillColor = "";
+          el.style.color = "#fff";
+        }
+      } else {
+        el.style.backgroundImage = "";
+        el.style.webkitBackgroundClip = "";
+        el.style.backgroundClip = "";
+        el.style.webkitTextFillColor = "";
+        Object.assign(el.style, {
+          color: i < activeIdx ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.35)",
+          fontWeight: "normal",
+          fontSize: "14px",
+          background: "",
+        });
+      }
+    });
+
+    // Scroll: only when active line changes
+    if (activeIdx !== pipLastActiveIdx) {
+      const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
+      const activeEl = body.querySelector(`[data-line-index="${activeIdx}"]`);
+      if (activeEl && !userJustScrolled) {
+        const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
+        body.scrollTo({ top: targetTop, behavior: "smooth" });
+      }
+      pipLastActiveIdx = activeIdx;
+    }
+
+    pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame);
+  }
+
   function syncPiP(currentTime, isPlaying) {
     if (!pipWindow || pipWindow.closed) return;
 
@@ -274,29 +353,15 @@
       playBtn.textContent = isPlaying ? "⏸" : "▶";
     }
 
-    if (!pipParsedLRC || currentTime === null) return;
-    const body = pipWindow.document.getElementById("pip-body");
-    if (!body) return;
-    const activeIdx = getActiveLine(pipParsedLRC, currentTime - pipSongStartTime);
-    const userJustScrolled = (Date.now() - pipUserScrolledAt) < 5000;
-    const colHighlight = body.dataset.colHighlight || "rgba(160,196,255,0.18)";
-    let activeEl = null;
-    body.querySelectorAll("[data-line-index]").forEach((el, i) => {
-      if (i === activeIdx) {
-        activeEl = el;
-        Object.assign(el.style, { color: "#fff", fontWeight: "bold", fontSize: "15px", background: colHighlight });
-      } else if (i < activeIdx) {
-        Object.assign(el.style, { color: "rgba(255,255,255,0.25)", fontWeight: "normal", fontSize: "14px", background: "" });
-      } else {
-        Object.assign(el.style, { color: "rgba(255,255,255,0.35)", fontWeight: "normal", fontSize: "14px", background: "" });
-      }
-    });
-    // Always keep active line centered in the scroll container
-    if (activeEl && !userJustScrolled) {
-      const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
-      body.scrollTo({ top: targetTop, behavior: "smooth" });
+    // Record latest known time for rAF interpolation
+    pipCurrentTime = currentTime;
+    pipCurrentTimeAt = Date.now();
+    pipIsPlaying = isPlaying;
+
+    // Start the rAF loop if not already running
+    if (!pipKaraokeRafId && pipWindow && !pipWindow.closed) {
+      pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame);
     }
-    pipLastActiveIdx = activeIdx;
   }
 
   async function openPiPWindow(state) {
@@ -318,16 +383,19 @@
       const styleEl = pipWindow.document.createElement("style");
       styleEl.textContent = "*{box-sizing:border-box;}";
       pipWindow.document.head.appendChild(styleEl);
-      renderPiP(state);
+      await renderPiP(state);
+      // Kick off 60fps karaoke loop immediately
+      pipKaraokeRafId = null;
+      if (pipWindow && !pipWindow.closed) {
+        pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame);
+      }
       pipWindow.addEventListener("pagehide", () => {
+        pipKaraokeRafId = null; // rAF loop dies with the window, just clear the id
         pipWindow = null;
         pipParsedLRC = null;
-        // User explicitly closed the window (X button) — disable auto-reopen
         if (document.visibilityState === "visible") {
           pipEnabled = false;
         }
-        // If page is hidden the mediaSession handler will reopen it automatically
-        // when the user switches away again, so we leave pipEnabled as-is.
       });
     } catch (e) {
       console.error("[pip] requestWindow failed:", e.message);

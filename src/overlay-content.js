@@ -332,6 +332,12 @@ let overlayUserScrolledAt = 0;
 let overlayRenderGeneration = 0;
 // Cached accent colors from last color extraction, used by SYNC_UPDATE
 let overlayColHighlight = "rgba(160,196,255,0.18)";
+// Live playback state for 60fps karaoke interpolation
+let overlayCurrentTime = 0;
+let overlayCurrentTimeAt = 0;
+let overlayIsPlaying = false;
+let overlayKaraokeRafId = null;
+let overlayKaraokeEnabled = true; // synced from chrome.storage
 
 let currentMode = "expanded";
 
@@ -542,6 +548,9 @@ async function renderOverlay(state) {
     applyMode(overlay);
     overlayLastActiveIdx = -1;
     overlayUserScrolledAt = 0;
+    // Start 60fps karaoke loop
+    overlayKaraokeRafId = null;
+    overlayKaraokeRafId = requestAnimationFrame(overlayKaraokeFrame);
   } else if (lyricsStatus === "not_found") {
     const msg = document.createElement("div");
     applyStyles(msg, STATUS_STYLES);
@@ -603,6 +612,76 @@ async function renderOverlay(state) {
   overlay.appendChild(controls);
 }
 
+function overlayKaraokeFrame() {
+  if (!parsedLRC) { overlayKaraokeRafId = requestAnimationFrame(overlayKaraokeFrame); return; }
+  const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
+  if (!body) { overlayKaraokeRafId = requestAnimationFrame(overlayKaraokeFrame); return; }
+
+  const isCompact = body.dataset.compact === "true";
+  const elapsed = overlayIsPlaying ? (Date.now() - overlayCurrentTimeAt) / 1000 : 0;
+  const songTime = (overlayCurrentTime + elapsed) - parsedLRCSongStartTime;
+  const activeIdx = getActiveLine(parsedLRC, songTime);
+
+  const lineStart = parsedLRC[activeIdx].time;
+  const lineEnd = parsedLRC[activeIdx + 1] ? parsedLRC[activeIdx + 1].time : lineStart + 5;
+  const fillPct = Math.min(Math.max((songTime - lineStart) / Math.max(lineEnd - lineStart, 0.1), 0), 1) * 100;
+
+  body.querySelectorAll("[data-line-index]").forEach((el, i) => {
+    if (i === activeIdx) {
+      el.style.display = "";
+      el.style.fontWeight = "bold";
+      el.style.fontSize = "15px";
+      el.style.background = isCompact ? "" : overlayColHighlight;
+      if (!isCompact && overlayKaraokeEnabled) {
+        // Karaoke fill mode
+        el.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.2) ${fillPct}%)`;
+        el.style.webkitBackgroundClip = "text";
+        el.style.backgroundClip = "text";
+        el.style.webkitTextFillColor = "transparent";
+        el.style.color = "";
+      } else {
+        // Plain highlight mode
+        el.style.backgroundImage = "";
+        el.style.webkitBackgroundClip = "";
+        el.style.backgroundClip = "";
+        el.style.webkitTextFillColor = "";
+        el.style.color = "#fff";
+      }
+    } else {
+      el.style.backgroundImage = "";
+      el.style.webkitBackgroundClip = "";
+      el.style.backgroundClip = "";
+      el.style.webkitTextFillColor = "";
+      if (isCompact) {
+        el.style.display = "none";
+      } else {
+        Object.assign(el.style, {
+          display: "",
+          color: i < activeIdx ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.5)",
+          fontWeight: "normal",
+          fontSize: "14px",
+          background: "",
+        });
+      }
+    }
+  });
+
+  // Scroll only when active line changes
+  if (activeIdx !== overlayLastActiveIdx) {
+    const userJustScrolled = (Date.now() - overlayUserScrolledAt) < 5000;
+    if (!isCompact && !userJustScrolled) {
+      const activeEl = body.querySelector(`[data-line-index="${activeIdx}"]`);
+      if (activeEl) {
+        const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
+        body.scrollTo({ top: targetTop, behavior: "smooth" });
+      }
+    }
+    overlayLastActiveIdx = activeIdx;
+  }
+
+  overlayKaraokeRafId = requestAnimationFrame(overlayKaraokeFrame);
+}
+
 // Export for testability (Node/Jest environment)
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { renderOverlay, getOrCreateOverlay, closeOverlay, makeDraggable, saveOverlayPrefs, loadOverlayPrefs, applyMode };
@@ -610,6 +689,17 @@ if (typeof module !== "undefined" && module.exports) {
 
 // Browser-only: wire up Chrome runtime messaging
 if (typeof chrome !== "undefined" && chrome.runtime) {
+  // Load karaoke preference
+  chrome.storage.local.get("karaokeMode", (result) => {
+    overlayKaraokeEnabled = result.karaokeMode !== false;
+  });
+  // Keep in sync if user changes it while overlay is open
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.karaokeMode) {
+      overlayKaraokeEnabled = changes.karaokeMode.newValue !== false;
+    }
+  });
+
   // Track the last known state so TOGGLE_OVERLAY can re-render it
   let lastKnownState = null;
 
@@ -628,50 +718,19 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
         parsedLRCSongStartTime = message.state.songStartTime || 0;
       }
     } else if (message.type === "SYNC_UPDATE") {
-      // Update play/pause icon live without re-rendering the whole overlay
+      // Update play/pause icon
       if (typeof message.isPlaying === "boolean") {
         const playBtn = document.getElementById("overlay-play-btn");
         if (playBtn) playBtn.textContent = message.isPlaying ? "⏸" : "▶";
       }
-      if (parsedLRC && message.currentTime !== null) {
-        const body = document.querySelector(`#${OVERLAY_ID} [data-role="lyrics-body"]`);
-        if (body) {
-          const isCompact = body.dataset.compact === "true";
-          const songTime = message.currentTime - parsedLRCSongStartTime;
-          const activeIdx = getActiveLine(parsedLRC, songTime);
-          const lines = body.querySelectorAll("[data-line-index]");
-          const userJustScrolled = (Date.now() - overlayUserScrolledAt) < 5000;
-          let activeEl = null;
-          lines.forEach((el, i) => {
-            if (i === activeIdx) {
-              activeEl = el;
-              Object.assign(el.style, {
-                color: "#ffffff",
-                fontWeight: "bold",
-                fontSize: "15px",
-                background: isCompact ? "" : overlayColHighlight,
-                display: "",
-              });
-            } else {
-              if (isCompact) {
-                el.style.display = "none";
-              } else {
-                Object.assign(el.style, {
-                  display: "",
-                  color: i < activeIdx ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.5)",
-                  fontWeight: "normal",
-                  fontSize: "14px",
-                  background: "",
-                });
-              }
-            }
-          });
-          // Always keep active line centered in the scroll container (non-compact only)
-          if (!isCompact && activeEl && !userJustScrolled) {
-            const targetTop = activeEl.offsetTop - (body.clientHeight / 2) + (activeEl.offsetHeight / 2);
-            body.scrollTo({ top: targetTop, behavior: "smooth" });
-          }
-          overlayLastActiveIdx = activeIdx;
+      // Update interpolation state for 60fps karaoke rAF loop
+      if (message.currentTime !== null) {
+        overlayCurrentTime = message.currentTime;
+        overlayCurrentTimeAt = Date.now();
+        overlayIsPlaying = message.isPlaying;
+        // Start rAF loop if not already running
+        if (!overlayKaraokeRafId && parsedLRC) {
+          overlayKaraokeRafId = requestAnimationFrame(overlayKaraokeFrame);
         }
       }
     } else if (message.type === "TOGGLE_OVERLAY") {
