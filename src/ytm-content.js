@@ -64,6 +64,74 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Audio analyser — taps the YTM <video> element for real bass energy
+  // ---------------------------------------------------------------------------
+  let audioCtx = null;
+  let analyserNode = null;
+  let freqData = null;
+  let smoothedEnergy = 0; // 0–1, smoothed bass energy used to drive thumbnail scale
+
+  function setupAudioAnalyser(video) {
+    if (analyserNode) return; // already set up
+    try {
+      audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(video);
+      analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 256;
+      analyserNode.smoothingTimeConstant = 0.75;
+      source.connect(analyserNode);
+      source.connect(audioCtx.destination); // keep audio playing
+      freqData = new Uint8Array(analyserNode.frequencyBinCount);
+      startVisualiserLoop();
+    } catch (e) {
+      console.warn("[visualiser] AudioContext failed:", e.message);
+      analyserNode = null;
+    }
+  }
+
+  function getBassEnergy() {
+    if (!analyserNode || !freqData) return 0;
+    analyserNode.getByteFrequencyData(freqData);
+    // Bass = roughly first 8 bins (0–200Hz at 256 fftSize / 44100Hz sample rate)
+    const bassBins = 8;
+    let sum = 0;
+    for (let i = 0; i < bassBins; i++) sum += freqData[i];
+    return sum / (bassBins * 255); // 0–1
+  }
+
+  function startVisualiserLoop() {
+    function loop() {
+      const raw = getBassEnergy();
+      // Smooth: fast attack (0.4), slow decay (0.08)
+      smoothedEnergy += raw > smoothedEnergy
+        ? (raw - smoothedEnergy) * 0.4
+        : (raw - smoothedEnergy) * 0.08;
+
+      const scale = 1 + smoothedEnergy * 0.18; // max ~1.18× at full bass
+      const glow = Math.round(smoothedEnergy * 255);
+
+      // Update PiP thumbnail
+      if (pipWindow && !pipWindow.closed) {
+        const thumb = pipWindow.document.getElementById("pip-thumb");
+        if (thumb) {
+          thumb.style.transform = `scale(${scale.toFixed(3)})`;
+          thumb.style.boxShadow = `0 2px ${8 + Math.round(smoothedEnergy * 20)}px rgba(${glow},${Math.round(glow*0.6)},${Math.round(glow*0.9)},${(0.3 + smoothedEnergy * 0.6).toFixed(2)})`;
+        }
+      }
+
+      // Update overlay thumbnail (same page context)
+      const overlayThumb = document.getElementById("overlay-thumb");
+      if (overlayThumb) {
+        overlayThumb.style.transform = `scale(${scale.toFixed(3)})`;
+        overlayThumb.style.boxShadow = `0 2px ${6 + Math.round(smoothedEnergy * 16)}px rgba(${glow},${Math.round(glow*0.6)},${Math.round(glow*0.9)},${(0.3 + smoothedEnergy * 0.6).toFixed(2)})`;
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------------------------------------------------------------------------
   // Album art color extraction
   // ---------------------------------------------------------------------------
 
@@ -160,6 +228,9 @@
         background-size: 300% 300% !important;
         animation: pip-header-shift 6s ease infinite !important;
       }
+      #pip-thumb {
+        transition: transform 0.05s linear, box-shadow 0.05s linear;
+      }
     `;
     doc.head.appendChild(style);
   }
@@ -203,7 +274,8 @@
     if (thumbUrl) {
       const thumb = doc.createElement("img");
       thumb.src = thumbUrl;
-      thumb.style.cssText = "width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,0.5);";
+      thumb.id = "pip-thumb";
+      thumb.style.cssText = "width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0;";
       header.appendChild(thumb);
     }
 
@@ -600,6 +672,11 @@
     video.dataset.ytmLyricsListening = "1";
     video.addEventListener("play",  broadcastPlayState);
     video.addEventListener("pause", broadcastPlayState);
+    // AudioContext requires a user gesture before it can start — the video
+    // playing means one has happened, so this is safe to call here.
+    video.addEventListener("play", () => setupAudioAnalyser(video), { once: true });
+    // If already playing when we attach, set up immediately
+    if (!video.paused) setupAudioAnalyser(video);
   }
 
   // Safely send a chrome runtime message — returns false if context is gone.

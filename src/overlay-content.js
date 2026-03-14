@@ -191,6 +191,9 @@ function applyOverlayHeaderGradient(color) {
       background-size: 300% 300% !important;
       animation: overlay-header-shift 6s ease infinite !important;
     }
+    #${OVERLAY_ID} #overlay-thumb {
+      transition: transform 0.05s linear, box-shadow 0.05s linear;
+    }
   `;
 }
 
@@ -462,7 +465,8 @@ async function renderOverlay(state) {
   if (state.thumbnailUrl) {
     const thumb = document.createElement("img");
     thumb.src = state.thumbnailUrl;
-    thumb.style.cssText = "width:36px;height:36px;border-radius:5px;object-fit:cover;flex-shrink:0;box-shadow:0 2px 6px rgba(0,0,0,0.5);margin-right:8px;";
+    thumb.id = "overlay-thumb";
+    thumb.style.cssText = "width:36px;height:36px;border-radius:5px;object-fit:cover;flex-shrink:0;margin-right:8px;";
     header.appendChild(thumb);
   }
 
