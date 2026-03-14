@@ -395,6 +395,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---------------------------------------------------------------------------
+// Global keyboard shortcut — "open-pip" command
+// ---------------------------------------------------------------------------
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== "open-pip") return;
+  chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+    if (!tabs || !tabs[0]) return;
+    chrome.scripting.executeScript({
+      target: { tabId: tabs[0].id },
+      world: "ISOLATED",
+      func: () => {
+        window.dispatchEvent(new CustomEvent("ytm-lyrics-open-pip"));
+      },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tab removal — clear state when the YTM tab closes (Requirement 1.4)
 // ---------------------------------------------------------------------------
 chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {

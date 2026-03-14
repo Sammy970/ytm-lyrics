@@ -37,6 +37,15 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
       statusMsg.textContent = getStatusMessage(state);
     });
 
+    // --- Show keyboard shortcut hint ---
+    chrome.commands.getAll((commands) => {
+      const cmd = commands.find(c => c.name === "open-pip");
+      const hintEl = document.getElementById("shortcut-hint");
+      if (hintEl && cmd && cmd.shortcut) {
+        hintEl.innerHTML = `Hotkey: <kbd>${cmd.shortcut}</kbd>`;
+      }
+    });
+
     // --- Karaoke setting ---
     const karaokeToggle = document.getElementById("karaoke-toggle");
     chrome.storage.local.get("karaokeMode", (result) => {
