@@ -166,6 +166,34 @@ function overlayDarken({ r, g, b }, factor) {
   return `rgb(${Math.round(r * factor)},${Math.round(g * factor)},${Math.round(b * factor)})`;
 }
 
+// Injects/updates a <style> tag with the header gradient keyframe animation.
+const OVERLAY_GRADIENT_STYLE_ID = "ytm-overlay-gradient-style";
+function applyOverlayHeaderGradient(color) {
+  const { r, g, b } = color;
+  const c1 = `rgb(${Math.round(r*0.25)},${Math.round(g*0.18)},${Math.round(b*0.35)})`;
+  const c2 = `rgb(${Math.round(r*0.15)},${Math.round(g*0.22)},${Math.round(b*0.28)})`;
+  const c3 = `rgb(${Math.round(Math.min(r*0.4,180))},${Math.round(Math.min(g*0.3,120))},${Math.round(Math.min(b*0.5,200))})`;
+
+  let style = document.getElementById(OVERLAY_GRADIENT_STYLE_ID);
+  if (!style) {
+    style = document.createElement("style");
+    style.id = OVERLAY_GRADIENT_STYLE_ID;
+    document.head.appendChild(style);
+  }
+  style.textContent = `
+    @keyframes overlay-header-shift {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    #${OVERLAY_ID} [data-role="overlay-header"] {
+      background: linear-gradient(135deg, ${c1}, ${c2}, ${c3}, ${c1}) !important;
+      background-size: 300% 300% !important;
+      animation: overlay-header-shift 6s ease infinite !important;
+    }
+  `;
+}
+
 /** Apply a plain object of style key/values to an element. */
 function applyStyles(el, styles) {
   Object.assign(el.style, styles);
@@ -417,13 +445,16 @@ async function renderOverlay(state) {
   overlay.style.background = `linear-gradient(180deg, ${overlayDarken(color, 0.22)} 0%, ${overlayDarken(color, 0.12)} 100%)`;
   overlay.style.backgroundColor = "";
 
+  // Inject animated header gradient keyframe
+  applyOverlayHeaderGradient(color);
+
   // Clear previous content
   overlay.innerHTML = "";
 
   // --- Header ---
   const header = document.createElement("div");
   applyStyles(header, HEADER_STYLES);
-  header.style.backgroundColor = colPanel;
+  header.dataset.role = "overlay-header";
   header.style.borderBottom = `1px solid ${colBorder}`;
   header.dataset.dragHandle = "true";
 

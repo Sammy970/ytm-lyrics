@@ -134,6 +134,36 @@
     return `rgb(${Math.round(r * factor)},${Math.round(g * factor)},${Math.round(b * factor)})`;
   }
 
+  // Builds the animated gradient CSS for a header element and injects the keyframe
+  // into the given document. Returns the CSS string to set as background.
+  function applyHeaderGradientAnimation(doc, color) {
+    const { r, g, b } = color;
+    // Three stops: shifted hue, base darkened, accent-ish lifted
+    const c1 = `rgb(${Math.round(r*0.25)},${Math.round(g*0.18)},${Math.round(b*0.35)})`; // deep shifted
+    const c2 = `rgb(${Math.round(r*0.15)},${Math.round(g*0.22)},${Math.round(b*0.28)})`; // dark base
+    const c3 = `rgb(${Math.round(Math.min(r*0.4,180))},${Math.round(Math.min(g*0.3,120))},${Math.round(Math.min(b*0.5,200))})`; // lifted
+
+    // Remove any existing keyframe style
+    const existing = doc.getElementById("pip-gradient-style");
+    if (existing) existing.remove();
+
+    const style = doc.createElement("style");
+    style.id = "pip-gradient-style";
+    style.textContent = `
+      @keyframes pip-header-shift {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+      #pip-header {
+        background: linear-gradient(135deg, ${c1}, ${c2}, ${c3}, ${c1}) !important;
+        background-size: 300% 300% !important;
+        animation: pip-header-shift 6s ease infinite !important;
+      }
+    `;
+    doc.head.appendChild(style);
+  }
+
   async function renderPiP(state) {
     if (!pipWindow || pipWindow.closed) return;
 
@@ -164,8 +194,10 @@
       `linear-gradient(180deg, ${colDark} 0%, rgb(8,8,14) 100%)`;
 
     // --- Header: album art + track info ---
+    applyHeaderGradientAnimation(doc, color);
     const header = doc.createElement("div");
-    header.style.cssText = `background:${colPanel};padding:8px 12px;flex-shrink:0;border-bottom:1px solid ${colBorder};display:flex;align-items:center;gap:10px;`;
+    header.id = "pip-header";
+    header.style.cssText = `padding:8px 12px;flex-shrink:0;border-bottom:1px solid ${colBorder};display:flex;align-items:center;gap:10px;`;
 
     // Album art thumbnail
     if (thumbUrl) {
