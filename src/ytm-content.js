@@ -472,19 +472,42 @@
 
     const fsBtn = doc.createElement("button");
     fsBtn.className = "pip-hud-btn";
-    fsBtn.title = "Toggle fullscreen";
+    fsBtn.title = "Maximize";
     fsBtn.textContent = "⛶";
+    // Track whether we're in the expanded state so the button toggles
+    let pipExpanded = false;
+    let pipSavedSize = null;
     fsBtn.addEventListener("click", () => {
-      if (!pipWindow.document.fullscreenElement) {
+      if (!pipExpanded) {
+        // Save current size so we can restore it
+        pipSavedSize = { w: pipWindow.outerWidth, h: pipWindow.outerHeight };
+        // Move to top-left corner and resize to full screen dimensions
+        pipWindow.moveTo(0, 0);
+        pipWindow.resizeTo(pipWindow.screen.width, pipWindow.screen.height);
+        // Also try native fullscreen — works on some Chrome versions
         pipWindow.document.documentElement.requestFullscreen().catch(() => {});
         fsBtn.textContent = "⊡";
+        fsBtn.title = "Restore size";
+        pipExpanded = true;
       } else {
-        pipWindow.document.exitFullscreen().catch(() => {});
+        // Exit native fullscreen if active
+        if (pipWindow.document.fullscreenElement) {
+          pipWindow.document.exitFullscreen().catch(() => {});
+        }
+        // Restore previous size
+        if (pipSavedSize) {
+          pipWindow.resizeTo(pipSavedSize.w, pipSavedSize.h);
+        }
         fsBtn.textContent = "⛶";
+        fsBtn.title = "Maximize";
+        pipExpanded = false;
       }
     });
+    // Sync icon if fullscreen is exited via Escape key
     pipWindow.document.addEventListener("fullscreenchange", () => {
-      fsBtn.textContent = pipWindow.document.fullscreenElement ? "⊡" : "⛶";
+      if (!pipWindow.document.fullscreenElement && pipExpanded) {
+        fsBtn.textContent = "⊡"; // still maximized via resizeTo even if native fullscreen exited
+      }
     });
     hud.appendChild(fsBtn);
 
@@ -494,6 +517,8 @@
     exitBtn.textContent = "✕";
     exitBtn.addEventListener("click", () => {
       if (pipWindow.document.fullscreenElement) pipWindow.document.exitFullscreen().catch(() => {});
+      if (pipExpanded && pipSavedSize) pipWindow.resizeTo(pipSavedSize.w, pipSavedSize.h);
+      pipExpanded = false;
       toggleImmersive(doc, color);
     });
     hud.appendChild(exitBtn);
