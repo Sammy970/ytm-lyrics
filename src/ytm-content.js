@@ -28,6 +28,13 @@
     return parsed.length > 0 ? parsed : null;
   }
 
+  function fmtTime(sec) {
+    if (!isFinite(sec) || sec < 0) return "0:00";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   function getActiveLine(lines, currentTime) {
     let active = 0;
     for (let i = 0; i < lines.length; i++) {
@@ -56,6 +63,7 @@
   let pipIsPlaying = false;
   let pipKaraokeRafId = null;
   let pipKaraokeEnabled = true; // synced from chrome.storage
+  let pipDuration = 0;
 
   let pipBlurEnabled = true;
   let pipImmersive = false;
@@ -381,6 +389,40 @@
       #pip-immersive:hover #pip-immersive-controls {
         opacity: 1;
       }
+      /* Immersive progress bar — pinned to bottom edge */
+      #pip-immersive-progress {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 3;
+        padding: 0 0 2px;
+      }
+      #pip-immersive-time-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 10px 3px;
+        font-size: 10px;
+        color: rgba(255,255,255,0.45);
+        font-variant-numeric: tabular-nums;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      #pip-immersive:hover #pip-immersive-time-row { opacity: 1; }
+      #pip-immersive-track {
+        height: 3px;
+        background: rgba(255,255,255,0.15);
+        cursor: pointer;
+        position: relative;
+      }
+      #pip-immersive-track:hover { height: 5px; }
+      #pip-immersive-fill {
+        height: 100%;
+        width: 0%;
+        background: rgba(255,255,255,0.7);
+        pointer-events: none;
+        transition: width 0.1s linear;
+      }
     `;
     doc.head.appendChild(style);
   }
@@ -575,6 +617,41 @@
     immContent.appendChild(immCtrl);
     immersiveLayer.appendChild(immContent);
 
+    // Immersive progress bar at the very bottom
+    const immProgress = doc.createElement("div");
+    immProgress.id = "pip-immersive-progress";
+
+    const immTimeRow = doc.createElement("div");
+    immTimeRow.id = "pip-immersive-time-row";
+    const immCur = doc.createElement("span"); immCur.id = "pip-imm-cur"; immCur.textContent = "0:00";
+    const immDur = doc.createElement("span"); immDur.id = "pip-imm-dur"; immDur.textContent = "0:00";
+    immTimeRow.appendChild(immCur);
+    immTimeRow.appendChild(immDur);
+    immProgress.appendChild(immTimeRow);
+
+    const immTrack = doc.createElement("div");
+    immTrack.id = "pip-immersive-track";
+    const immFill = doc.createElement("div");
+    immFill.id = "pip-immersive-fill";
+    immTrack.appendChild(immFill);
+
+    // Seek on click
+    function immSeekFromEvent(e) {
+      const rect = immTrack.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const seekTime = pipSongStartTime + pct * Math.max(pipDuration - pipSongStartTime, 0);
+      pipCurrentTime = seekTime;
+      pipCurrentTimeAt = Date.now();
+      chrome.runtime.sendMessage({ type: "SEEK_TO", time: seekTime });
+    }
+    let immScrubbing = false;
+    immTrack.addEventListener("mousedown", (e) => { immScrubbing = true; immSeekFromEvent(e); e.preventDefault(); });
+    doc.addEventListener("mousemove", (e) => { if (immScrubbing) immSeekFromEvent(e); });
+    doc.addEventListener("mouseup", () => { immScrubbing = false; });
+
+    immProgress.appendChild(immTrack);
+    immersiveLayer.appendChild(immProgress);
+
     doc.body.appendChild(immersiveLayer);
 
     const body = doc.createElement("div");
@@ -626,10 +703,62 @@
     body.dataset.colAccent = colAccent;
     body.dataset.colHighlight = colHighlight;
 
+    // --- Progress bar (sits between lyrics and controls) ---
+    const progressWrap = doc.createElement("div");
+    progressWrap.id = "pip-progress-wrap";
+    progressWrap.style.cssText = `background:${colPanel};border-top:1px solid ${colBorder};flex-shrink:0;padding:6px 14px 2px;`;
+
+    // Time labels row
+    const timeRow = doc.createElement("div");
+    timeRow.style.cssText = "display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px;font-variant-numeric:tabular-nums;";
+    const timeEl  = doc.createElement("span"); timeEl.id  = "pip-time-cur";  timeEl.textContent = "0:00";
+    const durEl   = doc.createElement("span"); durEl.id   = "pip-time-dur";  durEl.textContent = "0:00";
+    timeRow.appendChild(timeEl);
+    timeRow.appendChild(durEl);
+    progressWrap.appendChild(timeRow);
+
+    // Track (background bar)
+    const track = doc.createElement("div");
+    track.style.cssText = `position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,0.12);cursor:pointer;`;
+    track.id = "pip-progress-track";
+
+    // Fill bar
+    const fill = doc.createElement("div");
+    fill.id = "pip-progress-fill";
+    fill.style.cssText = `height:100%;border-radius:2px;width:0%;background:linear-gradient(to right,${colAccent},rgba(255,255,255,0.6));transition:width 0.1s linear;pointer-events:none;`;
+    track.appendChild(fill);
+
+    // Thumb dot (appears on hover)
+    const thumb = doc.createElement("div");
+    thumb.id = "pip-progress-thumb";
+    thumb.style.cssText = `position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);left:0%;opacity:0;transition:opacity 0.15s;pointer-events:none;box-shadow:0 0 4px rgba(0,0,0,0.5);`;
+    track.appendChild(thumb);
+
+    // Hover effects
+    track.addEventListener("mouseenter", () => { thumb.style.opacity = "1"; track.style.height = "5px"; });
+    track.addEventListener("mouseleave", () => { thumb.style.opacity = "0"; track.style.height = "4px"; });
+
+    // Seek on click / drag
+    function seekFromEvent(e) {
+      const rect = track.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const seekTime = pipSongStartTime + pct * Math.max(pipDuration - pipSongStartTime, 0);
+      pipCurrentTime = seekTime;
+      pipCurrentTimeAt = Date.now();
+      chrome.runtime.sendMessage({ type: "SEEK_TO", time: seekTime });
+    }
+    let scrubbing = false;
+    track.addEventListener("mousedown", (e) => { scrubbing = true; seekFromEvent(e); e.preventDefault(); });
+    doc.addEventListener("mousemove", (e) => { if (scrubbing) seekFromEvent(e); });
+    doc.addEventListener("mouseup", () => { scrubbing = false; });
+
+    progressWrap.appendChild(track);
+    doc.body.appendChild(progressWrap);
+
     // --- Controls footer: ⏮  ⏯  ⏭ ---
     const footer = doc.createElement("div");
     footer.id = "pip-controls";
-    footer.style.cssText = `background:${colPanel};border-top:1px solid ${colBorder};flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;`;
+    footer.style.cssText = `background:${colPanel};flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 12px 10px;`;
 
     const btnStyle = `background:none;border:none;color:${colAccent};font-size:20px;cursor:pointer;padding:4px 10px;border-radius:6px;transition:background 0.15s;line-height:1;`;
     const btnHoverBg = `rgba(${r},${g},${b},0.25)`;
@@ -679,6 +808,31 @@
 
   function pipKaraokeFrame() {
     if (!pipWindow || pipWindow.closed) { pipKaraokeRafId = null; return; }
+
+    // --- Progress bar update (normal + immersive) — runs even for plain lyrics ---
+    if (pipDuration > 0) {
+      const absTime  = pipCurrentTime + (pipIsPlaying ? (Date.now() - pipCurrentTimeAt) / 1000 : 0);
+      const songLen  = Math.max(pipDuration - pipSongStartTime, 1);
+      const songPos  = Math.max(absTime - pipSongStartTime, 0);
+      const pct      = Math.min(songPos / songLen * 100, 100).toFixed(2);
+      const fmtCur   = fmtTime(songPos);
+      const fmtDur   = fmtTime(songLen);
+      const fillEl   = pipWindow.document.getElementById("pip-progress-fill");
+      const thumbEl  = pipWindow.document.getElementById("pip-progress-thumb");
+      const curEl    = pipWindow.document.getElementById("pip-time-cur");
+      const durEl    = pipWindow.document.getElementById("pip-time-dur");
+      if (fillEl)  fillEl.style.width  = pct + "%";
+      if (thumbEl) thumbEl.style.left  = pct + "%";
+      if (curEl)   curEl.textContent   = fmtCur;
+      if (durEl)   durEl.textContent   = fmtDur;
+      const immFillEl = pipWindow.document.getElementById("pip-immersive-fill");
+      const immCurEl  = pipWindow.document.getElementById("pip-imm-cur");
+      const immDurEl  = pipWindow.document.getElementById("pip-imm-dur");
+      if (immFillEl) immFillEl.style.width = pct + "%";
+      if (immCurEl)  immCurEl.textContent  = fmtCur;
+      if (immDurEl)  immDurEl.textContent  = fmtDur;
+    }
+
     if (!pipParsedLRC) { pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame); return; }
 
     const body = pipWindow.document.getElementById("pip-body");
@@ -732,6 +886,7 @@
       }
     });
 
+
     // --- Immersive layer update ---
     const immLine = pipWindow.document.getElementById("pip-immersive-line");
     const immPlay = pipWindow.document.getElementById("pip-immersive-play");
@@ -767,7 +922,7 @@
     pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame);
   }
 
-  function syncPiP(currentTime, isPlaying) {
+  function syncPiP(currentTime, isPlaying, duration) {
     if (!pipWindow || pipWindow.closed) return;
 
     // Update play/pause button icon
@@ -780,6 +935,7 @@
     pipCurrentTime = currentTime;
     pipCurrentTimeAt = Date.now();
     pipIsPlaying = isPlaying;
+    if (duration) pipDuration = duration;
 
     // Start the rAF loop if not already running
     if (!pipKaraokeRafId && pipWindow && !pipWindow.closed) {
@@ -961,9 +1117,32 @@
     } else if (message.type === "LYRICS_UPDATE") {
       pipLastState = message.state;
       pipSongStartTime = (message.state && message.state.songStartTime) || 0;
-      if (pipWindow && !pipWindow.closed) renderPiP(message.state);
+      // Reset progress so the bar doesn't show stale position from the previous song
+      pipCurrentTime = 0;
+      pipCurrentTimeAt = Date.now();
+      pipDuration = 0;
+      if (pipWindow && !pipWindow.closed) {
+        // Immediately zero out the bars before the async renderPiP runs
+        ["pip-progress-fill", "pip-immersive-fill"].forEach(id => {
+          const el = pipWindow.document.getElementById(id);
+          if (el) el.style.width = "0%";
+        });
+        ["pip-progress-thumb"].forEach(id => {
+          const el = pipWindow.document.getElementById(id);
+          if (el) el.style.left = "0%";
+        });
+        ["pip-time-cur", "pip-imm-cur"].forEach(id => {
+          const el = pipWindow.document.getElementById(id);
+          if (el) el.textContent = "0:00";
+        });
+        ["pip-time-dur", "pip-imm-dur"].forEach(id => {
+          const el = pipWindow.document.getElementById(id);
+          if (el) el.textContent = "0:00";
+        });
+        renderPiP(message.state);
+      }
     } else if (message.type === "SYNC_UPDATE") {
-      syncPiP(message.currentTime, message.isPlaying);
+      syncPiP(message.currentTime, message.isPlaying, message.duration);
     } else if (message.type === "MEDIA_CONTROL") {
       const video = document.querySelector('video');
       if (message.action === "play-pause") {
@@ -1008,15 +1187,46 @@
     }
   }
 
+  // --- Duration from YTM UI ---
+  // Reads the duration label directly from the YTM player bar (e.g. "3:45").
+  // This is the exact value the user sees and is always stable — unlike
+  // video.duration which can fluctuate due to buffering/HLS segment changes.
+  function getYtmDuration() {
+    // YTM renders time as "1:23 / 3:45" inside .time-info, or just the
+    // duration inside [slot="duration"] or .ytmusic-player-bar .duration
+    const selectors = [
+      'ytmusic-player-bar .time-info',
+      'ytmusic-player-bar span[slot="duration"]',
+      'ytmusic-player-bar .duration',
+      '#song-elapsed-time',       // older layout
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const text = el.textContent.trim();
+      // Format may be "1:23 / 3:45" or just "3:45"
+      const parts = text.split('/');
+      const durText = (parts.length === 2 ? parts[1] : parts[0]).trim();
+      const match = durText.match(/^(\d+):(\d{2})$/);
+      if (match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+    }
+    return null; // couldn't read it
+  }
+
   // --- Playback time sync ---
   // Send current video time every 500ms for PiP lyric sync.
   const timeInterval = setInterval(() => {
     attachVideoListeners();
     const video = document.querySelector('video');
     if (!video) return;
+    // Prefer the duration shown in the YTM UI — it's stable and matches what
+    // the user sees. Fall back to video.duration only if the DOM read fails.
+    const ytmDur = getYtmDuration();
+    const duration = ytmDur !== null ? (pipSongStartTime + ytmDur) : (isFinite(video.duration) ? video.duration : 0);
     const ok = safeSend({
       type: 'TIME_UPDATE',
       currentTime: video.currentTime,
+      duration,
       isPlaying: !video.paused,
     });
     if (!ok) clearInterval(timeInterval);

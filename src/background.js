@@ -239,7 +239,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       appState.isPlaying = message.isPlaying;
     }
     // SYNC_UPDATE only goes to the YTM tab — PiP runs there
-    sendToYtmTab({ type: "SYNC_UPDATE", currentTime: message.currentTime, isPlaying: appState.isPlaying });
+    sendToYtmTab({ type: "SYNC_UPDATE", currentTime: message.currentTime, duration: message.duration || 0, isPlaying: appState.isPlaying });
     return false;
   }
 
