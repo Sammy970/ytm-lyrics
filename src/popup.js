@@ -23,7 +23,6 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
     const trackTitle = document.getElementById("track-title");
     const trackArtist = document.getElementById("track-artist");
     const statusMsg = document.getElementById("status-msg");
-    const toggleBtn = document.getElementById("toggle-btn");
 
     chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
       const state = response && response.state ? response.state : null;
@@ -62,14 +61,6 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
     });
     blurToggle.addEventListener("change", () => {
       chrome.storage.local.set({ blurMode: blurToggle.checked });
-    });
-
-    toggleBtn.addEventListener("click", () => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs && tabs[0] && tabs[0].id != null) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: "TOGGLE_OVERLAY" });
-        }
-      });
     });
 
     document.getElementById("window-btn").addEventListener("click", () => {

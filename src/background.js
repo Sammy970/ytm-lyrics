@@ -2,7 +2,7 @@
 // Feature: yt-music-floating-lyrics
 
 // ---------------------------------------------------------------------------
-// AppState — single source of truth (Requirements 1.3, 5.3)
+// AppState — single source of truth
 // ---------------------------------------------------------------------------
 let appState = {
   nowPlaying: null,      // Track | null
@@ -12,34 +12,6 @@ let appState = {
   isPlaying: false,      // whether the video is currently playing
   thumbnailUrl: null,    // album art URL for the current track
 };
-
-// ---------------------------------------------------------------------------
-// Active overlay tab tracking — Requirements 5.2
-// Tracks which tab IDs currently have an active overlay so we can broadcast.
-// ---------------------------------------------------------------------------
-const activeOverlayTabs = new Set();
-
-// ---------------------------------------------------------------------------
-// Lyrics window tracking — reuse existing window instead of opening duplicates
-// ---------------------------------------------------------------------------
-let lyricsWindowId = null;
-
-function createLyricsWindow() {
-  chrome.windows.create({
-    url: chrome.runtime.getURL("src/lyrics-window.html"),
-    type: "popup",
-    width: 380,
-    height: 600,
-    focused: true,
-  }, (win) => {
-    if (win) lyricsWindowId = win.id;
-  });
-}
-
-// Clear the tracked ID when the window is closed
-chrome.windows.onRemoved.addListener((windowId) => {
-  if (windowId === lyricsWindowId) lyricsWindowId = null;
-});
 
 // ---------------------------------------------------------------------------
 // Lyrics fetcher — inlined from src/lyrics-fetcher.js (service workers can't use require)
@@ -116,14 +88,10 @@ async function fetchLyrics(track) {
 }
 
 // ---------------------------------------------------------------------------
-// Lyrics cache helpers — Requirements 2.5
+// Lyrics cache helpers
 // Cache entries stored in chrome.storage.local keyed by `${title}::${artist}`
 // ---------------------------------------------------------------------------
 
-/**
- * Clear all cached lyrics entries (keys that contain "::").
- * Called on service worker startup to wipe stale entries from previous sessions.
- */
 function clearLyricsCache() {
   chrome.storage.local.get(null, (all) => {
     const keysToRemove = Object.keys(all).filter(k => k.includes("::"));
@@ -135,23 +103,12 @@ function clearLyricsCache() {
   });
 }
 
-// Clear cache on startup so improved fetch logic runs fresh
 clearLyricsCache();
 
-/**
- * Build the cache key for a track.
- * @param {{ title: string, artist: string }} track
- * @returns {string}
- */
 function cacheKey(track) {
   return `${track.title.toLowerCase()}::${track.artist.toLowerCase()}`;
 }
 
-/**
- * Read a cache entry from chrome.storage.local.
- * @param {string} key
- * @returns {Promise<{ lyrics: string|null, status: "found"|"not_found"|"error", fetchedAt: number }|null>}
- */
 function getCacheEntry(key) {
   return new Promise((resolve) => {
     chrome.storage.local.get(key, (result) => {
@@ -160,32 +117,17 @@ function getCacheEntry(key) {
   });
 }
 
-/**
- * Write a cache entry to chrome.storage.local.
- * @param {string} key
- * @param {{ lyrics: string|null, status: "found"|"not_found"|"error" }} entry
- */
 function setCacheEntry(key, entry) {
   const value = { ...entry, fetchedAt: Date.now() };
   chrome.storage.local.set({ [key]: value }, () => {
     if (chrome.runtime.lastError) {
-      // Storage quota exceeded or other error — log and continue (design: skip cache write)
       console.warn("[lyrics-cache] Failed to write cache:", chrome.runtime.lastError.message);
     }
   });
 }
 
-/**
- * Fetch lyrics with cache-aside logic.
- * Checks chrome.storage.local first; only calls fetchLyrics on a cache miss.
- * Stores the result after a successful fetch.
- * @param {{ title: string, artist: string }} track
- * @returns {Promise<{ status: "found"|"not_found"|"error", lyrics: string|null }>}
- */
 async function fetchLyricsWithCache(track) {
   const key = cacheKey(track);
-
-  // Cache hit — return stored result directly
   const cached = await getCacheEntry(key);
   if (cached && (cached.status === "found" || cached.status === "not_found")) {
     console.log(`[lyrics-cache] Cache hit for "${key}" → status: ${cached.status}`);
@@ -195,7 +137,6 @@ async function fetchLyricsWithCache(track) {
   console.log(`[lyrics-cache] Cache miss for "${key}", fetching from API...`);
   const result = await fetchLyrics(track);
 
-  // Persist result (skip caching transient "error" status to allow retries later)
   if (result.status === "found" || result.status === "not_found") {
     setCacheEntry(key, { lyrics: result.lyrics ?? null, status: result.status });
   }
@@ -204,36 +145,26 @@ async function fetchLyricsWithCache(track) {
 }
 
 // ---------------------------------------------------------------------------
-// Broadcast helpers — Requirements 5.2
+// Broadcast helpers — sends state only to the YTM tab (PiP lives there)
 // ---------------------------------------------------------------------------
 
-/**
- * Send the current appState to every tab that has an active overlay.
- * Errors per-tab are silently ignored (tab may have navigated away).
- */
+function sendToYtmTab(message) {
+  chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+    if (!tabs || !tabs[0]) return;
+    chrome.tabs.sendMessage(tabs[0].id, message, () => {
+      void chrome.runtime.lastError;
+    });
+  });
+}
+
 function broadcastState() {
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      chrome.tabs.sendMessage(tab.id, { type: "LYRICS_UPDATE", state: appState }, () => {
-        void chrome.runtime.lastError;
-      });
-    }
-  });
-  // Also notify extension pages (floating lyrics window)
-  chrome.runtime.sendMessage({ type: "LYRICS_UPDATE", state: appState }, () => {
-    void chrome.runtime.lastError;
-  });
+  sendToYtmTab({ type: "LYRICS_UPDATE", state: appState });
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Update appState and kick off a lyrics fetch for the given track.
- * @param {Track|null} track
- * @param {number} songStartTime - video.currentTime when this track started
- */
 async function handleNowPlaying(track, songStartTime, thumbnailUrl) {
   appState.nowPlaying = track;
 
@@ -267,7 +198,6 @@ async function handleNowPlaying(track, songStartTime, thumbnailUrl) {
 
   try {
     const result = await fetchLyricsWithCache(cleanTrack);
-    // Only apply the result if the track hasn't changed while we were fetching
     if (
       appState.nowPlaying &&
       appState.nowPlaying.title === cleanTrack.title &&
@@ -291,83 +221,38 @@ async function handleNowPlaying(track, songStartTime, thumbnailUrl) {
 }
 
 // ---------------------------------------------------------------------------
-// Message listener (Requirements 1.3, 5.3)
+// Message listener
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "OPEN_LYRICS_WINDOW") {
-    // If a lyrics window is already open, focus it instead of opening a new one
-    if (lyricsWindowId != null) {
-      chrome.windows.update(lyricsWindowId, { focused: true }, (win) => {
-        if (chrome.runtime.lastError || !win) {
-          // Window no longer exists, open a fresh one
-          lyricsWindowId = null;
-          createLyricsWindow();
-        }
-      });
-    } else {
-      createLyricsWindow();
-    }
-    return false;
-  }
-
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "NOW_PLAYING") {
-    // Fire-and-forget; sendResponse not needed for this message type
     handleNowPlaying(message.track, message.songStartTime, message.thumbnailUrl);
     return false;
   }
 
   if (message.type === "SEEK_TO") {
-    // Find the YTM tab and tell its content script to seek the video
-    chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
-      if (tabs && tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: "SEEK_TO", time: message.time }, () => {
-          void chrome.runtime.lastError;
-        });
-      }
-    });
+    sendToYtmTab({ type: "SEEK_TO", time: message.time });
     return false;
   }
 
   if (message.type === "TIME_UPDATE") {
-    // Track play state so it's available in GET_STATE responses
     if (typeof message.isPlaying === "boolean") {
       appState.isPlaying = message.isPlaying;
     }
-    // Forward playback time + play state to all tabs AND the lyrics window
-    const syncMsg = { type: "SYNC_UPDATE", currentTime: message.currentTime, isPlaying: appState.isPlaying };
-    chrome.tabs.query({}, (tabs) => {
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, syncMsg, () => { void chrome.runtime.lastError; });
-      }
-    });
-    chrome.runtime.sendMessage(syncMsg, () => { void chrome.runtime.lastError; });
+    // SYNC_UPDATE only goes to the YTM tab — PiP runs there
+    sendToYtmTab({ type: "SYNC_UPDATE", currentTime: message.currentTime, isPlaying: appState.isPlaying });
     return false;
   }
 
   if (message.type === "PLAY_STATE") {
-    // Immediate play/pause broadcast (fires faster than the 500ms TIME_UPDATE interval)
     if (typeof message.isPlaying === "boolean") {
       appState.isPlaying = message.isPlaying;
     }
-    const playMsg = { type: "SYNC_UPDATE", currentTime: null, isPlaying: appState.isPlaying };
-    chrome.tabs.query({}, (tabs) => {
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, playMsg, () => { void chrome.runtime.lastError; });
-      }
-    });
-    chrome.runtime.sendMessage(playMsg, () => { void chrome.runtime.lastError; });
+    sendToYtmTab({ type: "SYNC_UPDATE", currentTime: null, isPlaying: appState.isPlaying });
     return false;
   }
 
   if (message.type === "MEDIA_CONTROL") {
-    // Forward to the YTM tab where the actual player lives
-    chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
-      if (tabs && tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: "MEDIA_CONTROL", action: message.action }, () => {
-          void chrome.runtime.lastError;
-        });
-      }
-    });
+    sendToYtmTab({ type: "MEDIA_CONTROL", action: message.action });
     return false;
   }
 
@@ -376,21 +261,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === "OVERLAY_ACTIVE") {
-    if (sender.tab && sender.tab.id != null) {
-      activeOverlayTabs.add(sender.tab.id);
-    }
-    return false;
-  }
-
-  if (message.type === "OVERLAY_INACTIVE") {
-    if (sender.tab && sender.tab.id != null) {
-      activeOverlayTabs.delete(sender.tab.id);
-    }
-    return false;
-  }
-
-  // Unknown message — no response
   return false;
 });
 
@@ -412,13 +282,9 @@ chrome.commands.onCommand.addListener((command) => {
 });
 
 // ---------------------------------------------------------------------------
-// Tab removal — clear state when the YTM tab closes (Requirement 1.4)
+// Tab removal — clear state when the YTM tab closes
 // ---------------------------------------------------------------------------
-chrome.tabs.onRemoved.addListener((tabId, _removeInfo) => {
-  // Remove the closed tab from the active overlay set
-  activeOverlayTabs.delete(tabId);
-
-  // If no YTM tab remains, clear the now-playing state
+chrome.tabs.onRemoved.addListener(() => {
   chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
     if (!tabs || tabs.length === 0) {
       appState.nowPlaying = null;

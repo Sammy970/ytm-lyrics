@@ -139,12 +139,6 @@
         }
       }
 
-      // Update overlay thumbnail (same page context)
-      const overlayThumb = document.getElementById("overlay-thumb");
-      if (overlayThumb) {
-        overlayThumb.style.transform = `scale(${scale.toFixed(3)})`;
-        overlayThumb.style.boxShadow = `0 2px ${6 + Math.round(smoothedEnergy * 16)}px rgba(${glow},${Math.round(glow*0.6)},${Math.round(glow*0.9)},${(0.3 + smoothedEnergy * 0.6).toFixed(2)})`;
-      }
 
       requestAnimationFrame(loop);
     }
@@ -973,7 +967,7 @@
   }
 
   // --- Playback time sync ---
-  // Send current video time every 500ms so the overlay can highlight the active lyric line.
+  // Send current video time every 500ms for PiP lyric sync.
   const timeInterval = setInterval(() => {
     attachVideoListeners();
     const video = document.querySelector('video');

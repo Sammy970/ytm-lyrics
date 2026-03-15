@@ -11,8 +11,7 @@
   ],
   "host_permissions": [
     "*://music.youtube.com/*",
-    "*://lrclib.net/*",
-    "<all_urls>"
+    "*://lrclib.net/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -21,11 +20,6 @@
     {
       "matches": ["*://music.youtube.com/*"],
       "js": ["src/ytm-content.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["src/overlay-content.js"],
       "run_at": "document_idle"
     }
   ],
