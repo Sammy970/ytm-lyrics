@@ -90,6 +90,8 @@
         });
         const immLine = pipWindow.document.getElementById("pip-immersive-line");
         if (immLine) immLine.style.fontSize = Math.round(basePx * 1.75) + "px";
+        const immNext = pipWindow.document.getElementById("pip-immersive-next");
+        if (immNext) immNext.style.fontSize = Math.round(basePx * 1.1) + "px";
       }
     }
   });
@@ -343,6 +345,24 @@
         text-shadow: 0 2px 12px rgba(0,0,0,0.8);
         transition: filter 0.3s, font-size 0.2s;
       }
+      #pip-immersive-next {
+        margin-top: 16px;
+        font-weight: normal;
+        line-height: 1.4;
+        word-break: break-word;
+        white-space: normal;
+        max-width: 100%;
+        color: rgba(255,255,255,0.35);
+        text-shadow: 0 1px 8px rgba(0,0,0,0.6);
+        transition: opacity 0.5s ease, transform 0.5s ease, font-size 0.2s;
+        opacity: 0;
+        transform: translateY(6px);
+        pointer-events: none;
+      }
+      #pip-immersive-next.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
       /* Top-right HUD buttons */
       #pip-immersive-hud {
         position: absolute;
@@ -388,6 +408,68 @@
       }
       #pip-immersive:hover #pip-immersive-controls {
         opacity: 1;
+      }
+      /* Song info card — slides in from left on hover */
+      #pip-immersive-info-card {
+        position: absolute;
+        left: 20px;
+        bottom: 28px;
+        z-index: 3;
+        display: flex;
+        align-items: flex-end;
+        gap: 14px;
+        opacity: 0;
+        transform: translateX(-18px);
+        transition: opacity 0.4s ease, transform 0.4s ease;
+        pointer-events: none;
+        max-width: 55%;
+      }
+      #pip-immersive:hover #pip-immersive-info-card {
+        opacity: 1;
+        transform: translateX(0);
+      }
+      #pip-info-art {
+        width: 64px;
+        height: 64px;
+        border-radius: 10px;
+        object-fit: cover;
+        flex-shrink: 0;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+      }
+      #pip-info-text {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+      #pip-info-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #fff;
+        text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+      }
+      #pip-info-artist {
+        font-size: 12px;
+        color: rgba(255,255,255,0.65);
+        text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+      }
+      #pip-info-album {
+        font-size: 10px;
+        color: rgba(255,255,255,0.38);
+        text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+        margin-top: 1px;
       }
       /* Immersive progress bar — pinned to bottom edge */
       #pip-immersive-progress {
@@ -599,6 +681,11 @@
     immersiveLine.style.fontSize = Math.round(FONT_STEP_PX[pipFontStep] * 1.75) + "px";
     immContent.appendChild(immersiveLine);
 
+    const immersiveNext = doc.createElement("div");
+    immersiveNext.id = "pip-immersive-next";
+    immersiveNext.style.fontSize = Math.round(FONT_STEP_PX[pipFontStep] * 1.1) + "px";
+    immContent.appendChild(immersiveNext);
+
     // Immersive controls (shown on hover)
     const immCtrl = doc.createElement("div");
     immCtrl.id = "pip-immersive-controls";
@@ -616,6 +703,40 @@
     });
     immContent.appendChild(immCtrl);
     immersiveLayer.appendChild(immContent);
+
+    // Song info card — bottom-left, slides in on hover
+    const infoCard = doc.createElement("div");
+    infoCard.id = "pip-immersive-info-card";
+
+    if (thumbUrl) {
+      const infoArt = doc.createElement("img");
+      infoArt.id = "pip-info-art";
+      infoArt.src = thumbUrl;
+      infoArt.alt = "";
+      infoCard.appendChild(infoArt);
+    }
+
+    const infoText = doc.createElement("div");
+    infoText.id = "pip-info-text";
+
+    const infoTitle = doc.createElement("div");
+    infoTitle.id = "pip-info-title";
+    infoTitle.textContent = state && state.nowPlaying ? state.nowPlaying.title : "";
+
+    const infoArtist = doc.createElement("div");
+    infoArtist.id = "pip-info-artist";
+    infoArtist.textContent = state && state.nowPlaying ? state.nowPlaying.artist : "";
+
+    const infoAlbum = doc.createElement("div");
+    infoAlbum.id = "pip-info-album";
+    const album = extractAlbum();
+    if (album) infoAlbum.textContent = album;
+
+    infoText.appendChild(infoTitle);
+    infoText.appendChild(infoArtist);
+    if (album) infoText.appendChild(infoAlbum);
+    infoCard.appendChild(infoText);
+    immersiveLayer.appendChild(infoCard);
 
     // Immersive progress bar at the very bottom
     const immProgress = doc.createElement("div");
@@ -889,6 +1010,7 @@
 
     // --- Immersive layer update ---
     const immLine = pipWindow.document.getElementById("pip-immersive-line");
+    const immNext = pipWindow.document.getElementById("pip-immersive-next");
     const immPlay = pipWindow.document.getElementById("pip-immersive-play");
     if (immLine && pipParsedLRC[activeIdx]) {
       immLine.textContent = pipParsedLRC[activeIdx].text || "♪";
@@ -904,6 +1026,20 @@
         immLine.style.backgroundClip = "";
         immLine.style.webkitTextFillColor = "";
         immLine.style.color = "#fff";
+      }
+    }
+    // Next line preview — show the upcoming lyric line below current
+    if (immNext) {
+      const nextLine = pipParsedLRC[activeIdx + 1];
+      // Hide if no next line, or it's blank/musical note only, or same text as current
+      const nextText = nextLine ? (nextLine.text || "").trim() : "";
+      const currText = pipParsedLRC[activeIdx] ? (pipParsedLRC[activeIdx].text || "").trim() : "";
+      const showNext = nextText && nextText !== currText;
+      if (showNext) {
+        immNext.textContent = nextText;
+        immNext.classList.add("visible");
+      } else {
+        immNext.classList.remove("visible");
       }
     }
     if (immPlay) immPlay.textContent = pipIsPlaying ? "⏸" : "▶";
@@ -1026,6 +1162,21 @@
   function extractArtist(byline) {
     // Split on any of: " • ", " · ", " - " or just the bullet/dot with optional spaces
     return byline.split(/\s*[•·]\s*/)[0].trim();
+  }
+
+  function extractAlbum() {
+    const playerBar = document.querySelector('ytmusic-player-bar');
+    if (!playerBar) return null;
+    const bylineEl = playerBar.querySelector('yt-formatted-string.byline');
+    if (!bylineEl) return null;
+    const parts = bylineEl.textContent.trim().split(/\s*[•·]\s*/);
+    // Format: "Artist • Album • Year" — album is index 1 if it exists and isn't just a year
+    if (parts.length >= 2) {
+      const candidate = parts[1].trim();
+      // Skip if it looks like a bare year (4 digits)
+      if (!/^\d{4}$/.test(candidate)) return candidate;
+    }
+    return null;
   }
 
   /**
