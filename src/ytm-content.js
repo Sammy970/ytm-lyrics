@@ -59,15 +59,31 @@
 
   let pipBlurEnabled = true;
   let pipImmersive = false;
+  // Font size step: 0=S, 1=M, 2=L, 3=XL  →  base px for lyric lines
+  const FONT_STEP_PX = [11, 14, 18, 23];
+  let pipFontStep = 1; // default Medium
 
-  // Load and keep karaoke + blur preferences in sync
-  chrome.storage.local.get(["karaokeMode", "blurMode"], (r) => {
-    pipKaraokeEnabled = r.karaokeMode !== false;
-    pipBlurEnabled    = r.blurMode    !== false;
+  // Load and keep karaoke + blur + font preferences in sync
+  chrome.storage.local.get(["karaokeMode", "blurMode", "lyricsFontStep"], (r) => {
+    pipKaraokeEnabled = r.karaokeMode    !== false;
+    pipBlurEnabled    = r.blurMode       !== false;
+    pipFontStep       = (r.lyricsFontStep != null) ? r.lyricsFontStep : 1;
   });
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.karaokeMode) pipKaraokeEnabled = changes.karaokeMode.newValue !== false;
-    if (changes.blurMode)    pipBlurEnabled    = changes.blurMode.newValue    !== false;
+    if (changes.karaokeMode)   pipKaraokeEnabled = changes.karaokeMode.newValue !== false;
+    if (changes.blurMode)      pipBlurEnabled    = changes.blurMode.newValue    !== false;
+    if (changes.lyricsFontStep != null) {
+      pipFontStep = changes.lyricsFontStep.newValue;
+      // Live-apply to open PiP without a full re-render
+      if (pipWindow && !pipWindow.closed) {
+        const basePx = FONT_STEP_PX[pipFontStep];
+        pipWindow.document.querySelectorAll("[data-line-index]").forEach((el) => {
+          el.style.fontSize = basePx + "px";
+        });
+        const immLine = pipWindow.document.getElementById("pip-immersive-line");
+        if (immLine) immLine.style.fontSize = Math.round(basePx * 1.75) + "px";
+      }
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -311,14 +327,13 @@
         transition: transform 0.05s linear, box-shadow 0.05s linear;
       }
       #pip-immersive-line {
-        font-size: 26px;
         font-weight: bold;
         line-height: 1.4;
         word-break: break-word;
         white-space: normal;
         max-width: 100%;
         text-shadow: 0 2px 12px rgba(0,0,0,0.8);
-        transition: filter 0.3s;
+        transition: filter 0.3s, font-size 0.2s;
       }
       /* Top-right HUD buttons */
       #pip-immersive-hud {
@@ -539,6 +554,7 @@
     const immersiveLine = doc.createElement("div");
     immersiveLine.id = "pip-immersive-line";
     immersiveLine.textContent = "";
+    immersiveLine.style.fontSize = Math.round(FONT_STEP_PX[pipFontStep] * 1.75) + "px";
     immContent.appendChild(immersiveLine);
 
     // Immersive controls (shown on hover)
@@ -589,7 +605,8 @@
         pipParsedLRC.forEach((line, i) => {
           const p = doc.createElement("p");
           p.dataset.lineIndex = String(i);
-          p.style.cssText = "margin:4px 0;padding:3px 8px;border-radius:4px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s,filter 0.4s;word-break:break-word;white-space:normal;";
+          const basePx = FONT_STEP_PX[pipFontStep];
+          p.style.cssText = `margin:4px 0;padding:3px 8px;border-radius:4px;font-size:${basePx}px;line-height:1.6;color:rgba(255,255,255,0.25);cursor:pointer;transition:color 0.3s,background 0.3s,filter 0.4s;word-break:break-word;white-space:normal;`;
           // Staggered fade-in: cap delay so it doesn't take forever on long lyrics
           p.classList.add("pip-line-fade");
           p.style.animationDelay = `${Math.min(i * 30, 600)}ms`;
@@ -684,7 +701,7 @@
       if (i === activeIdx) {
         el.style.background = colHighlight;
         el.style.fontWeight = "bold";
-        el.style.fontSize = "15px";
+        el.style.fontSize = Math.round(FONT_STEP_PX[pipFontStep] * 1.07) + "px";
         el.style.filter = "none";
         if (pipKaraokeEnabled) {
           el.style.backgroundImage = `linear-gradient(to right, #ffffff ${fillPct}%, rgba(255,255,255,0.2) ${fillPct}%)`;
@@ -709,7 +726,7 @@
         Object.assign(el.style, {
           color: i < activeIdx ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.35)",
           fontWeight: "normal",
-          fontSize: "14px",
+          fontSize: FONT_STEP_PX[pipFontStep] + "px",
           background: "",
         });
       }

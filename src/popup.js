@@ -54,6 +54,39 @@ if (typeof document !== "undefined" && typeof chrome !== "undefined") {
       chrome.storage.local.set({ karaokeMode: karaokeToggle.checked });
     });
 
+    // --- Font size setting ---
+    const FONT_STEPS = ["S", "M", "L", "XL"];
+    const fontLabel = document.getElementById("font-size-label");
+    const fontDec   = document.getElementById("font-dec");
+    const fontInc   = document.getElementById("font-inc");
+
+    function applyFontStep(step) {
+      fontLabel.textContent = FONT_STEPS[step];
+      fontDec.disabled = step === 0;
+      fontInc.disabled = step === FONT_STEPS.length - 1;
+    }
+
+    let currentFontStep = 1; // default Medium
+    chrome.storage.local.get("lyricsFontStep", (r) => {
+      currentFontStep = (r.lyricsFontStep != null) ? r.lyricsFontStep : 1;
+      applyFontStep(currentFontStep);
+    });
+
+    fontDec.addEventListener("click", () => {
+      if (currentFontStep > 0) {
+        currentFontStep--;
+        chrome.storage.local.set({ lyricsFontStep: currentFontStep });
+        applyFontStep(currentFontStep);
+      }
+    });
+    fontInc.addEventListener("click", () => {
+      if (currentFontStep < FONT_STEPS.length - 1) {
+        currentFontStep++;
+        chrome.storage.local.set({ lyricsFontStep: currentFontStep });
+        applyFontStep(currentFontStep);
+      }
+    });
+
     // --- Blur setting ---
     const blurToggle = document.getElementById("blur-toggle");
     chrome.storage.local.get("blurMode", (result) => {

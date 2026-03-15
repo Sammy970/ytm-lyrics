@@ -37,6 +37,19 @@
       padding: 1px 5px; font-family: monospace; font-size: 11px; color: #aaa;
     }
     .setting-row span { line-height: 1.3; }
+    /* Font size stepper */
+    .font-stepper {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .font-stepper button {
+      background: #2a2a2a; border: 1px solid #444; color: #f0f0f0;
+      width: 26px; height: 22px; border-radius: 4px; cursor: pointer;
+      font-size: 13px; line-height: 1; padding: 0;
+      transition: background 0.15s;
+    }
+    .font-stepper button:hover { background: #3a3a3a; }
+    .font-stepper button:disabled { opacity: 0.35; cursor: default; }
+    #font-size-label { font-size: 11px; color: #aaa; min-width: 24px; text-align: center; }
     /* Toggle switch */
     .switch { position:relative; width:36px; height:20px; flex-shrink:0; }
     .switch input { opacity:0; width:0; height:0; }
@@ -61,6 +74,14 @@
   <div id="status-msg"></div>
   <button id="window-btn">Open Floating Lyrics (PiP)</button>
   <div class="shortcut-hint" id="shortcut-hint"></div>
+  <div class="setting-row">
+    <span>Lyrics font size</span>
+    <div class="font-stepper">
+      <button id="font-dec">A−</button>
+      <span id="font-size-label">M</span>
+      <button id="font-inc">A+</button>
+    </div>
+  </div>
   <div class="setting-row">
     <span>Karaoke fill effect</span>
     <label class="switch">
