@@ -67,6 +67,7 @@
 
   let pipBlurEnabled = true;
   let pipImmersive = false;
+  let pipStarRafId = null;
   // Font size step: 0=S, 1=M, 2=L, 3=XL  →  base px for lyric lines
   const FONT_STEP_PX = [11, 14, 18, 23];
   let pipFontStep = 1; // default Medium
@@ -409,6 +410,16 @@
       #pip-immersive:hover #pip-immersive-controls {
         opacity: 1;
       }
+      /* Particle / star field canvas */
+      #pip-star-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+        opacity: 0.55;
+      }
       /* Song info card — slides in from left on hover */
       #pip-immersive-info-card {
         position: absolute;
@@ -600,6 +611,11 @@
     }
     immersiveLayer.appendChild(immBg);
 
+    // Star field canvas — sits above blurred bg, below vignette
+    const starCanvas = doc.createElement("canvas");
+    starCanvas.id = "pip-star-canvas";
+    immersiveLayer.appendChild(starCanvas);
+
     // Dark vignette on top of blurred bg
     const immVignette = doc.createElement("div");
     immVignette.id = "pip-immersive-vignette";
@@ -775,6 +791,12 @@
 
     doc.body.appendChild(immersiveLayer);
 
+    // Restart star field if immersive was already active (e.g. song changed mid-immersive)
+    if (pipImmersive) {
+      stopStarField();
+      startStarField(doc, color);
+    }
+
     const body = doc.createElement("div");
     body.id = "pip-body";
     body.style.cssText = "flex:1;overflow-y:auto;padding:12px 14px;scroll-behavior:smooth;background:transparent;";
@@ -916,6 +938,99 @@
     doc.body.appendChild(footer);
   }
 
+  function startStarField(doc, color) {
+    const canvas = doc.getElementById("pip-star-canvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const { r, g, b } = color;
+
+    const STAR_COUNT = 90;
+    const stars = Array.from({ length: STAR_COUNT }, () => ({
+      x: Math.random(),          // 0-1 relative position
+      y: Math.random(),
+      size: 0.4 + Math.random() * 1.4,
+      speed: 0.02 + Math.random() * 0.06,  // base drift speed (% per second)
+      angle: (Math.random() * 60 - 30) * Math.PI / 180, // slight diagonal drift
+      opacity: 0.2 + Math.random() * 0.6,
+      twinkleOffset: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.4 + Math.random() * 1.2,
+    }));
+
+    let lastTime = performance.now();
+
+    function frame(now) {
+      if (!pipWindow || pipWindow.closed || !pipImmersive) {
+        pipStarRafId = null;
+        return;
+      }
+
+      const w = canvas.offsetWidth;
+      const h = canvas.offsetHeight;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+
+      const dt = Math.min((now - lastTime) / 1000, 0.1); // seconds, capped
+      lastTime = now;
+
+      // Bass energy boosts speed and brightness
+      const energy = typeof smoothedEnergy !== "undefined" ? smoothedEnergy : 0;
+      const speedMult = 1 + energy * 5;
+
+      ctx.clearRect(0, 0, w, h);
+
+      for (const s of stars) {
+        // Drift upward with slight horizontal angle
+        s.y -= s.speed * speedMult * dt;
+        s.x += Math.sin(s.angle) * s.speed * speedMult * dt * 0.3;
+
+        // Wrap around edges
+        if (s.y < -0.02) { s.y = 1.02; s.x = Math.random(); }
+        if (s.x < -0.02) s.x = 1.02;
+        if (s.x > 1.02)  s.x = -0.02;
+
+        // Twinkle
+        const twinkle = 0.6 + 0.4 * Math.sin(now * 0.001 * s.twinkleSpeed + s.twinkleOffset);
+        const alpha = s.opacity * twinkle * (1 + energy * 0.6);
+        const sz = s.size * (1 + energy * 1.2);
+
+        const px = s.x * w;
+        const py = s.y * h;
+
+        // Soft glow with album accent tint
+        const grad = ctx.createRadialGradient(px, py, 0, px, py, sz * 3);
+        grad.addColorStop(0, `rgba(${Math.min(r+140,255)},${Math.min(g+140,255)},${Math.min(b+140,255)},${alpha.toFixed(2)})`);
+        grad.addColorStop(0.4, `rgba(${Math.min(r+80,255)},${Math.min(g+80,255)},${Math.min(b+80,255)},${(alpha * 0.3).toFixed(2)})`);
+        grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+
+        ctx.beginPath();
+        ctx.arc(px, py, sz * 3, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Bright core dot
+        ctx.beginPath();
+        ctx.arc(px, py, sz * 0.6, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(alpha * 1.4, 1).toFixed(2)})`;
+        ctx.fill();
+      }
+
+      pipStarRafId = pipWindow.requestAnimationFrame(frame);
+    }
+
+    pipStarRafId = pipWindow.requestAnimationFrame(frame);
+  }
+
+  function stopStarField() {
+    pipStarRafId = null; // the frame loop checks pipImmersive and exits itself
+    // Clear the canvas immediately so there's no ghost when re-entering
+    if (pipWindow && !pipWindow.closed) {
+      const canvas = pipWindow.document.getElementById("pip-star-canvas");
+      if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
   function toggleImmersive(doc, color) {
     pipImmersive = !pipImmersive;
     const layer = doc.getElementById("pip-immersive");
@@ -924,6 +1039,11 @@
     if (btn) {
       btn.style.color = pipImmersive ? "#fff" : "rgba(255,255,255,0.5)";
       btn.title = pipImmersive ? "Exit immersive" : "Immersive mode";
+    }
+    if (pipImmersive) {
+      startStarField(doc, color);
+    } else {
+      stopStarField();
     }
   }
 
@@ -1105,7 +1225,8 @@
         pipKaraokeRafId = pipWindow.requestAnimationFrame(pipKaraokeFrame);
       }
       pipWindow.addEventListener("pagehide", () => {
-        pipKaraokeRafId = null; // rAF loop dies with the window, just clear the id
+        pipKaraokeRafId = null; // rAF loops die with the window, just clear the ids
+        pipStarRafId = null;
         pipWindow = null;
         pipParsedLRC = null;
         if (document.visibilityState === "visible") {
